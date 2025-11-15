@@ -1,0 +1,15 @@
+[project]
+name = "strat-stock-scanner"
+version = "0.1.0"
+description = "Mobile stock scanner using STRAT methodology and Alpaca API"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.2",
+    "mcp>=1.1.2",
+    "pydantic>=2.9.2",
+]
+
+[tool.uv]
+package = false
