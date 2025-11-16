@@ -26,10 +26,10 @@ app.include_router(auth_router, tags=["OAuth"])
 mcp = FastApiMCP(app, name="Alpaca Market Data + STRAT")
 
 
-# Register MCP tools with authentication
-# Note: Authentication is applied via dependency injection on the /mcp endpoint
+# Register MCP tools as FastAPI endpoints
+# fastapi-mcp will auto-discover these and expose them as MCP tools
 
-@mcp.tool()
+@app.post("/tools/get_stock_quote")
 async def get_stock_quote(ticker: str) -> str:
     """
     Get real-time stock quote with current price and bid/ask spread.
@@ -40,7 +40,7 @@ async def get_stock_quote(ticker: str) -> str:
     return await mcp_tools.get_stock_quote(ticker)
 
 
-@mcp.tool()
+@app.post("/tools/analyze_strat_patterns")
 async def analyze_strat_patterns(
     ticker: str,
     timeframe: str = "1Day",
@@ -60,7 +60,7 @@ async def analyze_strat_patterns(
     return await mcp_tools.analyze_strat_patterns(ticker, timeframe, days_back)
 
 
-@mcp.tool()
+@app.post("/tools/scan_sector_for_strat")
 async def scan_sector_for_strat(
     sector: str,
     top_n: int = 20,
@@ -80,7 +80,7 @@ async def scan_sector_for_strat(
     return await mcp_tools.scan_sector_for_strat(sector, top_n, pattern_filter)
 
 
-@mcp.tool()
+@app.post("/tools/scan_etf_holdings_strat")
 async def scan_etf_holdings_strat(etf: str, top_n: int = 30) -> str:
     """
     Scan top holdings of an ETF for STRAT patterns.
@@ -95,7 +95,7 @@ async def scan_etf_holdings_strat(etf: str, top_n: int = 30) -> str:
     return await mcp_tools.scan_etf_holdings_strat(etf, top_n)
 
 
-@mcp.tool()
+@app.post("/tools/get_multiple_quotes")
 async def get_multiple_quotes(tickers: List[str]) -> str:
     """
     Get quotes for multiple stocks at once (efficient bulk lookup).
@@ -107,6 +107,7 @@ async def get_multiple_quotes(tickers: List[str]) -> str:
 
 
 # Mount MCP server at /mcp endpoint with authentication
+# fastapi-mcp auto-discovers /tools/* endpoints and exposes them as MCP tools
 # Authentication is applied via dependency
 mcp.mount(prefix="/mcp", dependencies=[Depends(verify_token)])
 
