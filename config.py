@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # Server Configuration
     PORT: int = 8080
     DEBUG: bool = False
+    SERVER_URL: str = "http://localhost:8080"  # Override with Railway URL in production
 
     class Config:
         env_file = ".env"

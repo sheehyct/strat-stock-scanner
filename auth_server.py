@@ -98,10 +98,10 @@ async def oauth_protected_resource_metadata():
     Required by MCP specification for remote servers
     """
     return {
-        "resource": f"http://localhost:{settings.PORT}",  # Will be replaced with actual Railway URL
-        "authorization_servers": [f"http://localhost:{settings.PORT}"],
+        "resource": settings.SERVER_URL,
+        "authorization_servers": [settings.SERVER_URL],
         "bearer_methods_supported": ["header"],
-        "resource_documentation": f"http://localhost:{settings.PORT}/docs",
+        "resource_documentation": f"{settings.SERVER_URL}/docs",
         "scopes_supported": ["mcp:read", "mcp:write"]
     }
 
