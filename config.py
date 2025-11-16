@@ -4,7 +4,6 @@ Centralizes all environment variables and settings
 """
 
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -18,7 +17,7 @@ class Settings(BaseSettings):
     # OAuth 2.1 Configuration
     JWT_SECRET_KEY: str
     OAUTH_CLIENT_ID: str = "claude-mcp-client"
-    OAUTH_CLIENT_SECRET: Optional[str] = None
+    OAUTH_CLIENT_SECRET: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
