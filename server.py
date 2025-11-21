@@ -97,7 +97,7 @@ async def list_tools():
         ),
         Tool(
             name="scan_sector_for_strat",
-            description="Scan sector stocks for STRAT patterns - finds existing setups",
+            description="Scan sector stocks for STRAT patterns with ATR/volume filtering",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -106,21 +106,59 @@ async def list_tools():
                         "description": "Sector name (technology, healthcare, energy, financials, consumer, industrials, materials, utilities, real_estate, communications)"
                     },
                     "top_n": {"type": "integer", "default": 20, "description": "Number of stocks to scan (max 100)"},
-                    "pattern_filter": {"type": "string", "description": "Optional filter: '2-1-2', '3-1-2', '2-2', 'inside'"}
+                    "pattern_filter": {"type": "string", "description": "Optional filter: '2-1-2', '3-1-2', '2-2', 'inside'"},
+                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)"},
+                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)"},
+                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume (e.g., 20000000 for $20M)"}
                 },
                 "required": ["sector"]
             }
         ),
         Tool(
             name="scan_etf_holdings_strat",
-            description="Scan top holdings of an ETF for STRAT patterns",
+            description="Scan top holdings of an ETF for STRAT patterns with ATR/volume filtering",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "etf": {"type": "string", "description": "ETF symbol (e.g. SPY, QQQ, IWM, XLK, XLF)"},
-                    "top_n": {"type": "integer", "default": 30, "description": "Number of top holdings to scan"}
+                    "top_n": {"type": "integer", "default": 30, "description": "Number of top holdings to scan"},
+                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)"},
+                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)"},
+                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume (e.g., 20000000 for $20M)"}
                 },
                 "required": ["etf"]
+            }
+        ),
+        Tool(
+            name="analyze_tfc",
+            description="Analyze Timeframe Continuity (TFC) across Weekly/Daily/60min/15min timeframes",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Stock symbol (e.g., AAPL, SPY)"},
+                    "include_weekly": {"type": "boolean", "default": True, "description": "Include weekly timeframe (requires more data)"}
+                },
+                "required": ["ticker"]
+            }
+        ),
+        Tool(
+            name="scan_for_tfc_alignment",
+            description="Scan multiple stocks for multi-timeframe alignment (3/4 or 4/4 TFC score)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of stock symbols to scan"
+                    },
+                    "min_score": {"type": "integer", "default": 3, "description": "Minimum TFC score (1-4, default 3 for 3/4 alignment)"},
+                    "direction": {"type": "string", "enum": ["bullish", "bearish", "any"], "default": "bullish", "description": "Filter by direction"},
+                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars"},
+                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price"},
+                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume"}
+                },
+                "required": ["tickers"]
             }
         ),
         Tool(
@@ -160,12 +198,32 @@ async def call_tool(name: str, arguments: dict):
             result = await tools.scan_sector_for_strat(
                 arguments["sector"],
                 arguments.get("top_n", 20),
-                arguments.get("pattern_filter")
+                arguments.get("pattern_filter"),
+                arguments.get("min_atr", 0.0),
+                arguments.get("min_atr_percent", 0.0),
+                arguments.get("min_dollar_volume", 0.0)
             )
         elif name == "scan_etf_holdings_strat":
             result = await tools.scan_etf_holdings_strat(
                 arguments["etf"],
-                arguments.get("top_n", 30)
+                arguments.get("top_n", 30),
+                arguments.get("min_atr", 0.0),
+                arguments.get("min_atr_percent", 0.0),
+                arguments.get("min_dollar_volume", 0.0)
+            )
+        elif name == "analyze_tfc":
+            result = await tools.analyze_tfc(
+                arguments["ticker"],
+                arguments.get("include_weekly", True)
+            )
+        elif name == "scan_for_tfc_alignment":
+            result = await tools.scan_for_tfc_alignment(
+                arguments["tickers"],
+                arguments.get("min_score", 3),
+                arguments.get("direction", "bullish"),
+                arguments.get("min_atr", 0.0),
+                arguments.get("min_atr_percent", 0.0),
+                arguments.get("min_dollar_volume", 0.0)
             )
         elif name == "get_multiple_quotes":
             result = await tools.get_multiple_quotes(arguments["tickers"])
@@ -324,7 +382,9 @@ async def health():
             "Intelligent rate limiting (180 req/min)",
             "SSE transport (official MCP SDK)",
             "Real-time stock quotes",
-            "STRAT pattern detection"
+            "STRAT pattern detection",
+            "ATR/Volume filtering",
+            "Multi-timeframe TFC analysis"
         ]
     }
 
@@ -364,6 +424,8 @@ async def root():
             "analyze_strat_patterns",
             "scan_sector_for_strat",
             "scan_etf_holdings_strat",
+            "analyze_tfc",
+            "scan_for_tfc_alignment",
             "get_multiple_quotes"
         ]
     }
