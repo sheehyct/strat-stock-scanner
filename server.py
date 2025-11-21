@@ -26,7 +26,8 @@ mcp_server = Server("strat-stock-scanner")
 async def lifespan(app: FastAPI):
     """Lifespan context for FastAPI app"""
     print(f"🚀 STRAT Stock Scanner MCP Server starting on port {settings.PORT}")
-    print(f"📡 MCP endpoint: /mcp/sse")
+    print(f"📡 MCP SSE endpoint: /sse")
+    print(f"📨 MCP messages endpoint: /messages")
     print(f"🔐 OAuth metadata: /.well-known/oauth-protected-resource")
     yield
     print("👋 Server shutting down")
@@ -155,35 +156,51 @@ async def call_tool(name: str, arguments: dict):
         return [TextContent(type="text", text=error_msg)]
 
 
+# Create SSE transport (requires two endpoints: /sse GET and /messages POST)
+sse_transport = SseServerTransport("/messages")
+
+
 # SSE endpoint for MCP protocol (requires authentication)
-@app.get("/mcp/sse")
-async def mcp_sse_endpoint(request: Request, _token: dict = Depends(verify_token)):
+@app.get("/sse")
+async def handle_sse(request: Request, _token: dict = Depends(verify_token)):
     """
     Server-Sent Events endpoint for MCP protocol
     Requires OAuth 2.1 authentication via Bearer token
+
+    This is the main SSE endpoint that clients connect to.
+    Client messages are sent to /messages endpoint via POST.
     """
-    async def event_generator():
-        # Create SSE transport
-        transport = SseServerTransport("/mcp/messages")
+    from starlette.responses import Response
 
-        # Run MCP server session
-        async with mcp_server.run(
-            transport.read_stream,
-            transport.write_stream,
+    # Connect SSE session
+    async with sse_transport.connect_sse(
+        request.scope,
+        request.receive,
+        request._send
+    ) as streams:
+        # Run MCP server with the connected streams
+        await mcp_server.run(
+            streams[0],
+            streams[1],
             mcp_server.create_initialization_options()
-        ):
-            # Stream events
-            async for message in transport.read_stream:
-                yield message
+        )
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+    # Must return Response to avoid NoneType error
+    return Response()
+
+
+# Message endpoint for client POST requests (requires authentication)
+@app.post("/messages")
+async def handle_messages(request: Request, _token: dict = Depends(verify_token)):
+    """
+    Handle incoming POST messages from MCP client
+    These are linked to SSE sessions established at /sse
+    """
+    # Delegate to SSE transport's message handler
+    return await sse_transport.handle_post_message(
+        request.scope,
+        request.receive,
+        request._send
     )
 
 
@@ -214,7 +231,8 @@ async def root():
         "mcp_sdk": "official (mcp>=1.2.1)",
         "transport": "SSE (Server-Sent Events)",
         "endpoints": {
-            "mcp": "/mcp/sse (requires authentication)",
+            "mcp_sse": "/sse (requires authentication)",
+            "mcp_messages": "/messages (requires authentication)",
             "oauth_metadata": "/.well-known/oauth-protected-resource",
             "authorize": "/authorize",
             "token": "/token",
