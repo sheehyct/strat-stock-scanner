@@ -98,7 +98,7 @@ async def analyze_strat_patterns(
         report += f"   Key Level: ${pattern.entry_level:.2f}\n\n"
 
     # Show recent bar sequence
-    classified_bars = STRATDetector.classify_bars(bars[-5:])
+    classified_bars = STRATDetector.classify_bars(bars)[-5:]
     report += "**Recent Bar Sequence:**\n"
     for bar in classified_bars:
         bar_date = bar.timestamp.split('T')[0]
