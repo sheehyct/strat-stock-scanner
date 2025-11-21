@@ -107,8 +107,13 @@ async def get_multiple_quotes(tickers: List[str]) -> str:
 
 
 # Mount MCP server at /mcp endpoint with authentication
-# Authentication is applied via dependency on the endpoint
-mcp.serve(app, "/mcp", dependencies=[Depends(verify_token)])
+# Authentication is applied via dependency on the router
+app.include_router(
+    mcp.router,
+    prefix="/mcp",
+    dependencies=[Depends(verify_token)],
+    tags=["MCP"]
+)
 
 
 @app.get("/")
