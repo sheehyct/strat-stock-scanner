@@ -82,29 +82,37 @@ class AlpacaClient:
         Returns:
             List of bar dictionaries or empty list on error
         """
+        url = f"{self.base_url}/stocks/{ticker.upper()}/bars"
+        params = {
+            "start": start,
+            "end": end,
+            "timeframe": timeframe,
+            "feed": feed,
+            "adjustment": adjustment
+        }
+        print(f"🌐 [ALPACA API] GET {url}")
+        print(f"📋 [ALPACA API] Params: {params}")
+
         async with httpx.AsyncClient() as client:
             response = await alpaca_limiter.make_request(
                 client,
                 "GET",
-                f"{self.base_url}/stocks/{ticker.upper()}/bars",
-                params={
-                    "start": start,
-                    "end": end,
-                    "timeframe": timeframe,
-                    "feed": feed,
-                    "adjustment": adjustment
-                },
+                url,
+                params=params,
                 headers=self.headers,
                 timeout=15.0
             )
 
             if response and response.status_code == 200:
                 data = response.json()
-                return data.get("bars", [])
+                bars = data.get("bars", [])
+                print(f"✅ [ALPACA API] Success: {len(bars)} bars returned")
+                return bars
 
             # Log error for debugging
             if response:
-                print(f"❌ Alpaca bars API error: {response.status_code} - {response.text[:200]}")
+                print(f"❌ Alpaca bars API error: {response.status_code}")
+                print(f"📄 Response body: {response.text[:500]}")
             else:
                 print(f"❌ Alpaca bars API request failed - no response")
 
@@ -132,10 +140,18 @@ class AlpacaClient:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
 
+        # Format dates as RFC3339 with timezone (Alpaca requirement)
+        # Use strftime to avoid microseconds that Alpaca rejects
+        start_str = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_str = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        print(f"🔍 [ALPACA] get_bars_recent: ticker={ticker}, days_back={days_back}, timeframe={timeframe}, feed={feed}")
+        print(f"📅 [ALPACA] Date range: {start_str} to {end_str}")
+
         return await self.get_bars(
             ticker,
-            start_date.isoformat(),
-            end_date.isoformat(),
+            start_str,
+            end_str,
             timeframe,
             feed
         )

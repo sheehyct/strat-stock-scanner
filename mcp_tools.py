@@ -44,16 +44,28 @@ async def analyze_strat_patterns(
     Returns:
         Detailed STRAT pattern analysis with bar types and setups
     """
-    # Fetch historical bars using rate-limited client
-    bars = await alpaca.get_bars_recent(
-        ticker,
-        days_back=days_back,
-        timeframe=timeframe,
-        feed="sip"
-    )
+    print(f"🔍 [TOOL ENTRY] analyze_strat_patterns: ticker={ticker}, timeframe={timeframe}, days_back={days_back}")
 
-    if not bars:
-        return f"No data available for {ticker}"
+    try:
+        # Fetch historical bars using rate-limited client
+        print(f"📊 [API CALL] Fetching bars for {ticker}...")
+        bars = await alpaca.get_bars_recent(
+            ticker,
+            days_back=days_back,
+            timeframe=timeframe,
+            feed="sip"
+        )
+
+        print(f"✅ [API RESPONSE] Received {len(bars) if bars else 0} bars for {ticker}")
+
+        if not bars:
+            print(f"⚠️ [WARNING] No data returned for {ticker}")
+            return f"No data available for {ticker}"
+    except Exception as e:
+        print(f"❌ [ERROR] analyze_strat_patterns failed: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     # Detect patterns
     patterns = STRATDetector.scan_for_patterns(bars)

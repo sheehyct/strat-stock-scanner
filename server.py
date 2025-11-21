@@ -144,6 +144,9 @@ async def list_tools():
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """Execute STRAT analysis tools"""
+    print(f"\n🔧 [TOOL CALL] Tool: {name}")
+    print(f"📋 [TOOL CALL] Arguments: {arguments}")
+
     try:
         if name == "get_stock_quote":
             result = await tools.get_stock_quote(arguments["ticker"])
@@ -169,9 +172,13 @@ async def call_tool(name: str, arguments: dict):
         else:
             result = f"Unknown tool: {name}"
 
+        print(f"✅ [TOOL CALL] {name} completed successfully")
         return [TextContent(type="text", text=result)]
     except Exception as e:
         error_msg = f"Error executing {name}: {str(e)}"
+        print(f"❌ [TOOL CALL] {name} failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return [TextContent(type="text", text=error_msg)]
 
 
@@ -204,11 +211,15 @@ async def handle_sse(request: Request):
     try:
         token = auth_header.split(" ")[1] if " " in auth_header else auth_header
         await validate_token_string(token)
+        print(f"✅ [SSE] Authentication successful")
     except Exception as e:
+        print(f"❌ [SSE] Authentication failed: {str(e)}")
         return JSONResponse(
             status_code=403,
             content={"detail": f"Invalid token: {str(e)}"}
         )
+
+    print(f"🔌 [SSE] Connecting SSE session...")
 
     # Connect SSE session
     async with sse_transport.connect_sse(
@@ -216,12 +227,14 @@ async def handle_sse(request: Request):
         request.receive,
         request._send
     ) as streams:
+        print(f"✅ [SSE] SSE session connected, starting MCP server...")
         # Run MCP server with the connected streams
         await mcp_server.run(
             streams[0],
             streams[1],
             mcp_server.create_initialization_options()
         )
+        print(f"👋 [SSE] MCP server run completed")
 
     # Must return Response to avoid NoneType error
     return Response()
@@ -269,11 +282,20 @@ class AuthenticatedMessagesApp:
 # Add authenticated messages handler as raw ASGI route
 # This prevents 307 redirects that Mount would cause
 from starlette.routing import Route
+from starlette.responses import Response
 
 async def messages_route(request):
     """Route handler that delegates to authenticated ASGI app"""
+    print(f"📨 [MESSAGES] Received POST /messages request from {request.client}")
+    print(f"🔍 [MESSAGES] Session ID: {request.query_params.get('session_id', 'NONE')}")
+
     auth_app = AuthenticatedMessagesApp(sse_transport.handle_post_message)
+
+    # Call the ASGI app - it handles its own response
     await auth_app(request.scope, request.receive, request._send)
+
+    # Don't return anything - the ASGI app already sent the response
+    # Returning None prevents "double response" errors
 
 app.routes.append(Route("/messages", endpoint=messages_route, methods=["POST"]))
 
