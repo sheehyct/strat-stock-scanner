@@ -227,38 +227,47 @@ async def handle_sse(request: Request):
     return Response()
 
 
-# Message endpoint for client POST requests (requires authentication)
-@app.post("/messages")
-async def handle_messages(request: Request):
-    """
-    Handle incoming POST messages from MCP client
-    These are linked to SSE sessions established at /sse
-    """
-    from starlette.responses import JSONResponse
+# Middleware wrapper for messages endpoint authentication
+class AuthenticatedMessagesApp:
+    """Wrap SSE transport messages handler with authentication"""
 
-    # Manually verify auth token from headers
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth_header:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Missing authorization header"}
-        )
+    def __init__(self, transport):
+        self.transport = transport
 
-    try:
-        token = auth_header.split(" ")[1] if " " in auth_header else auth_header
-        await validate_token_string(token)
-    except Exception as e:
-        return JSONResponse(
-            status_code=403,
-            content={"detail": f"Invalid token: {str(e)}"}
-        )
+    async def __call__(self, scope, receive, send):
+        from starlette.responses import JSONResponse
 
-    # Call ASGI app directly - do NOT return (it handles response itself)
-    await sse_transport.handle_post_message(
-        request.scope,
-        request.receive,
-        request._send
-    )
+        # Extract auth header from scope
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization") or headers.get(b"Authorization")
+
+        if not auth_header:
+            response = JSONResponse(
+                status_code=401,
+                content={"detail": "Missing authorization header"}
+            )
+            await response(scope, receive, send)
+            return
+
+        try:
+            # Decode and validate token
+            auth_str = auth_header.decode("utf-8")
+            token = auth_str.split(" ")[1] if " " in auth_str else auth_str
+            await validate_token_string(token)
+        except Exception as e:
+            response = JSONResponse(
+                status_code=403,
+                content={"detail": f"Invalid token: {str(e)}"}
+            )
+            await response(scope, receive, send)
+            return
+
+        # Auth passed - delegate to transport
+        await self.transport(scope, receive, send)
+
+
+# Mount authenticated messages handler
+app.mount("/messages", AuthenticatedMessagesApp(sse_transport.handle_post_message))
 
 
 # Health check endpoint
