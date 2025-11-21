@@ -1,6 +1,6 @@
 # STRAT Stock Scanner
 
-Mobile-accessible stock scanner using STRAT methodology and Alpaca Markets API.
+Production-ready mobile stock scanner with OAuth 2.1 authentication and intelligent rate limiting.
 
 ## Overview
 
@@ -8,14 +8,25 @@ This project provides real-time stock scanning capabilities using Rob Smith's ST
 
 **Use Case:** Firefighter/trader needing mobile access to STRAT pattern detection during 24-hour shifts.
 
+**Version:** 2.0.0 - Production release with OAuth and rate limiting
+
 ## Features
 
+### Core Features
 - Real-time stock quotes via Alpaca API
 - STRAT pattern detection (2-1-2, 3-1-2, 2-2, inside bars)
-- Sector-wide scanning (Technology, Healthcare, Energy, etc.)
+- Sector-wide scanning (up to 100 stocks per scan)
 - ETF holdings analysis (SPY, QQQ, IWM, etc.)
-- Bulk quote lookups
+- Bulk quote lookups (up to 50 stocks)
 - Mobile-accessible via Claude MCP connector
+
+### Production Features (v2.0)
+- OAuth 2.1 authentication with PKCE (MCP spec-compliant)
+- Intelligent rate limiting (180 requests/minute, safely under Alpaca's 200 limit)
+- Exponential backoff on rate limit errors
+- Concurrent request limiting (max 3 simultaneous)
+- Automatic retry logic with configurable attempts
+- Comprehensive error handling
 
 ## STRAT Patterns Detected
 
@@ -34,15 +45,27 @@ This project provides real-time stock scanning capabilities using Rob Smith's ST
 ```
 strat-stock-scanner/
 ├── server.py              # Main MCP server with FastAPI
+├── config.py              # Configuration management
+├── auth_server.py         # OAuth 2.1 authorization server
+├── auth_middleware.py     # JWT token validation
+├── rate_limiter.py        # Intelligent rate limiting
+├── alpaca_client.py       # Alpaca API wrapper with rate limiting
+├── mcp_tools.py           # MCP tool definitions
 ├── strat_detector.py      # STRAT pattern detection engine
 ├── requirements.txt       # Python dependencies
-├── pyproject.toml        # UV package configuration
-├── railway.json          # Railway deployment config
+├── pyproject.toml         # UV package configuration
+├── railway.json           # Railway deployment config
+├── .env.example           # Environment variable template
+├── test_local.py          # Local testing script
+├── tests/                 # Unit and integration tests
+│   ├── test_auth.py
+│   ├── test_rate_limiter.py
+│   └── test_integration.py
 ├── docs/
-│   ├── claude.md         # Development guidelines
-│   └── DEPLOYMENT.md     # Deployment instructions
+│   ├── claude.md          # Development guidelines
+│   └── DEPLOYMENT.md      # Deployment instructions
 └── .claude/
-    ├── mcp.json          # MCP server configuration
+    ├── mcp.json           # MCP server configuration
     └── skills/
         └── strat-methodology/  # STRAT expertise skill
 ```
@@ -69,24 +92,42 @@ cd strat-stock-scanner
 uv sync
 ```
 
-3. **Set environment variables**
+3. **Generate OAuth secrets**
 ```bash
-export ALPACA_API_KEY="your_key_here"
-export ALPACA_API_SECRET="your_secret_here"
+python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
+python -c "import secrets; print('OAUTH_CLIENT_SECRET=' + secrets.token_urlsafe(32))"
 ```
 
-4. **Run the server**
+4. **Create .env file** (copy from .env.example)
+```bash
+cp .env.example .env
+# Edit .env and add your credentials
+```
+
+Required environment variables:
+```bash
+ALPACA_API_KEY=your_alpaca_api_key
+ALPACA_API_SECRET=your_alpaca_api_secret
+JWT_SECRET_KEY=generated_secret_from_step_3
+OAUTH_CLIENT_SECRET=generated_secret_from_step_3
+```
+
+5. **Run the server**
 ```bash
 uv run python server.py
 ```
 
-5. **Test locally**
+6. **Test locally**
 ```bash
-# Health check
-curl http://localhost:8080/health
+# Run comprehensive local tests
+uv run python test_local.py
 
-# MCP endpoint
-curl http://localhost:8080/mcp
+# Or test individual endpoints
+curl http://localhost:8080/health
+curl http://localhost:8080/.well-known/oauth-protected-resource
+
+# Run unit tests
+pytest tests/
 ```
 
 ### Railway Deployment
@@ -95,24 +136,52 @@ See `docs/DEPLOYMENT.md` for complete deployment instructions.
 
 **Quick Start:**
 
-1. Create GitHub repository with project files
-2. Connect to Railway
-3. Add environment variables:
-   - `ALPACA_API_KEY`
-   - `ALPACA_API_SECRET`
-4. Deploy automatically
-5. Get your URL: `https://your-app.up.railway.app/mcp`
+1. **Generate OAuth secrets locally:**
+```bash
+python -c "import secrets; print('JWT_SECRET_KEY=' + secrets.token_urlsafe(32))"
+python -c "import secrets; print('OAUTH_CLIENT_SECRET=' + secrets.token_urlsafe(32))"
+```
+
+2. **Create GitHub repository** with project files
+
+3. **Connect to Railway** and create new project
+
+4. **Add environment variables in Railway dashboard:**
+   - `ALPACA_API_KEY` - Your Alpaca API key
+   - `ALPACA_API_SECRET` - Your Alpaca API secret
+   - `JWT_SECRET_KEY` - Generated secret from step 1
+   - `OAUTH_CLIENT_SECRET` - Generated secret from step 1
+   - `OAUTH_CLIENT_ID` - `claude-mcp-client` (default)
+
+5. **Deploy automatically** - Railway builds and deploys from GitHub
+
+6. **Verify deployment:**
+```bash
+curl https://your-app.up.railway.app/health
+curl https://your-app.up.railway.app/.well-known/oauth-protected-resource
+```
+
+7. **Get your MCP URL:** `https://your-app.up.railway.app/mcp`
 
 ## Usage
 
 ### Connect to Claude
 
 1. Go to https://claude.ai → Settings → Connectors
+
 2. Add custom connector:
    - **Name:** Alpaca STRAT Scanner
    - **URL:** `https://your-app.up.railway.app/mcp`
-3. Enable connector in new chat
-4. Scanner is now available on mobile and desktop
+
+3. **Complete OAuth flow:**
+   - Claude will redirect you to the authorization endpoint
+   - You'll be redirected back with an authorization code
+   - Claude exchanges the code for an access token
+   - Token is valid for 1 hour, refresh token lasts 30 days
+
+4. Enable connector in new chat
+
+5. Scanner is now available on mobile and desktop
 
 ### Example Prompts
 
@@ -160,12 +229,17 @@ Deep STRAT analysis on a single stock with bar classification.
 - `days_back`: History to analyze (default: 10)
 
 ### scan_sector_for_strat
-Scan entire sector for STRAT patterns.
+Scan entire sector for STRAT patterns with intelligent rate limiting.
 
 **Parameters:**
 - `sector`: Sector name (technology, healthcare, energy, etc.)
-- `top_n`: Number of stocks to scan (default: 20, max: 50)
+- `top_n`: Number of stocks to scan (default: 20, max: 100)
 - `pattern_filter`: Optional ('2-1-2', '3-1-2', '2-2', 'inside')
+
+**Rate Limiting:**
+- Automatically throttled to stay under 180 requests/minute
+- Progress logging every 10 stocks
+- Safe for large scans (100+ stocks)
 
 ### scan_etf_holdings_strat
 Scan ETF top holdings for patterns.
@@ -206,7 +280,10 @@ Bulk quote lookup (up to 50 stocks).
 - **Alpaca Markets API** (paper or live account)
 - **IEX Feed:** Free tier (15-min delay)
 - **SIP Feed:** Paid subscription (real-time)
-- Rate limit: 200 requests/minute (paper trading)
+- **Rate Limit:** 200 requests/minute (paper trading)
+- **Our Limit:** 180 requests/minute (safety buffer)
+- **Concurrent Requests:** Max 3 simultaneous
+- **Retry Logic:** Exponential backoff on errors
 
 ### Cost Breakdown
 
@@ -236,12 +313,37 @@ See `docs/claude.md` for development guidelines.
 
 ### Testing
 
+**Local Testing:**
 ```bash
-# Run MCP inspector locally
-npx @modelcontextprotocol/inspector uv run python server.py
+# Run comprehensive local test suite
+uv run python test_local.py
 
-# Test pattern detection
-uv run python -c "from strat_detector import STRATDetector; print('Pattern detector loaded')"
+# This will test:
+# - Alpaca API connection
+# - Historical bar retrieval
+# - STRAT pattern detection
+# - Rate limiter with 10 concurrent requests
+# - OAuth secret generation
+```
+
+**Unit Tests:**
+```bash
+# Run all tests
+pytest tests/
+
+# Run specific test files
+pytest tests/test_rate_limiter.py
+pytest tests/test_auth.py
+pytest tests/test_integration.py
+
+# Run with verbose output
+pytest tests/ -v
+```
+
+**MCP Inspector:**
+```bash
+# Test MCP server with inspector
+npx @modelcontextprotocol/inspector uv run python server.py
 ```
 
 ## Important Notes
@@ -251,6 +353,23 @@ uv run python -c "from strat_detector import STRATDetector; print('Pattern detec
 - Always verify with your own STRAT analysis before trading
 - Data is 15-min delayed (IEX) unless using real-time subscription
 - Scans during market hours get freshest data
+
+### Security
+
+- OAuth 2.1 with PKCE prevents authorization code interception
+- JWT tokens expire after 1 hour for security
+- Refresh tokens valid for 30 days
+- All MCP endpoints require authentication
+- Never commit secrets to git (use .env file locally)
+- Railway environment variables are encrypted at rest
+
+### Rate Limiting
+
+- Automatically stays under Alpaca's 200 req/min limit
+- Safe to scan 100+ stocks without hitting rate limits
+- Exponential backoff on 429 rate limit errors
+- Maximum 3 concurrent requests to prevent overload
+- Progress logging for large scans
 
 ## Future Enhancements
 
