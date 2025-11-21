@@ -266,8 +266,9 @@ class AuthenticatedMessagesApp:
         await self.transport(scope, receive, send)
 
 
-# Mount authenticated messages handler
-app.mount("/messages", AuthenticatedMessagesApp(sse_transport.handle_post_message))
+# Add authenticated messages handler to routes (not as mount to avoid redirect)
+from starlette.routing import Mount
+app.routes.append(Mount("/messages", app=AuthenticatedMessagesApp(sse_transport.handle_post_message)))
 
 
 # Health check endpoint
