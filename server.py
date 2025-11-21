@@ -15,7 +15,26 @@ import uvicorn
 from config import settings
 from auth_middleware import verify_token
 from auth_server import router as auth_router
+from jose import jwt, JWTError
 import tools
+
+# Helper function to validate token string (for SSE endpoints)
+async def validate_token_string(token: str) -> dict:
+    """Validate a raw JWT token string"""
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=["HS256"]
+        )
+
+        # Verify token type and claims
+        if payload.get("token_type") != "access" or not payload.get("sub"):
+            raise ValueError("Invalid token")
+
+        return payload
+    except (jwt.ExpiredSignatureError, JWTError) as e:
+        raise ValueError(f"Token validation failed: {str(e)}")
 
 
 # Create MCP server instance
@@ -162,7 +181,7 @@ sse_transport = SseServerTransport("/messages")
 
 # SSE endpoint for MCP protocol (requires authentication)
 @app.get("/sse")
-async def handle_sse(request: Request, _token: dict = Depends(verify_token)):
+async def handle_sse(request: Request):
     """
     Server-Sent Events endpoint for MCP protocol
     Requires OAuth 2.1 authentication via Bearer token
@@ -170,7 +189,26 @@ async def handle_sse(request: Request, _token: dict = Depends(verify_token)):
     This is the main SSE endpoint that clients connect to.
     Client messages are sent to /messages endpoint via POST.
     """
-    from starlette.responses import Response
+    from starlette.responses import Response, JSONResponse
+    from fastapi import HTTPException
+
+    # Manually verify auth token from headers (Depends() doesn't work with SSE)
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Missing authorization header"}
+        )
+
+    # Verify token
+    try:
+        token = auth_header.split(" ")[1] if " " in auth_header else auth_header
+        await validate_token_string(token)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"Invalid token: {str(e)}"}
+        )
 
     # Connect SSE session
     async with sse_transport.connect_sse(
@@ -191,11 +229,30 @@ async def handle_sse(request: Request, _token: dict = Depends(verify_token)):
 
 # Message endpoint for client POST requests (requires authentication)
 @app.post("/messages")
-async def handle_messages(request: Request, _token: dict = Depends(verify_token)):
+async def handle_messages(request: Request):
     """
     Handle incoming POST messages from MCP client
     These are linked to SSE sessions established at /sse
     """
+    from starlette.responses import JSONResponse
+
+    # Manually verify auth token from headers
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if not auth_header:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Missing authorization header"}
+        )
+
+    try:
+        token = auth_header.split(" ")[1] if " " in auth_header else auth_header
+        await validate_token_string(token)
+    except Exception as e:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"Invalid token: {str(e)}"}
+        )
+
     # Delegate to SSE transport's message handler
     return await sse_transport.handle_post_message(
         request.scope,
