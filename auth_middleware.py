@@ -3,12 +3,14 @@ JWT token validation middleware
 Protects MCP endpoints with OAuth authentication
 """
 
-from fastapi import HTTPException, Security
+from fastapi import HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from config import settings
+from typing import Optional
 
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
 ALGORITHM = "HS256"
 
 
@@ -78,8 +80,8 @@ async def verify_token(
 
 
 async def optional_verify_token(
-    credentials: HTTPAuthorizationCredentials = Security(security, auto_error=False)
-) -> dict:
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional)
+) -> Optional[dict]:
     """
     Optional token validation (for endpoints that work with or without auth)
 
@@ -92,4 +94,25 @@ async def optional_verify_token(
     if not credentials:
         return None
 
-    return await verify_token(credentials)
+    token = credentials.credentials
+
+    try:
+        # Decode and validate JWT
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+
+        # Verify token type
+        if payload.get("token_type") != "access":
+            return None
+
+        # Verify required claims
+        if not payload.get("sub"):
+            return None
+
+        return payload
+
+    except (jwt.ExpiredSignatureError, JWTError):
+        return None
