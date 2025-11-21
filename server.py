@@ -280,26 +280,29 @@ class AuthenticatedMessagesApp:
 
 
 # Add authenticated messages handler
-# Using add_route with a wrapper to properly handle ASGI app
-from starlette.responses import Response
+# Create single instance of the authenticated ASGI app
+auth_messages_app = AuthenticatedMessagesApp(sse_transport.handle_post_message)
 
-async def messages_endpoint(request):
-    """Endpoint wrapper for authenticated ASGI messages handler"""
-    print(f"📨 [MESSAGES] Received POST /messages request from {request.client}")
-    print(f"🔍 [MESSAGES] Session ID: {request.query_params.get('session_id', 'NONE')}")
+# Define ASGI wrapper that adds logging
+class LoggingMessagesApp:
+    """Wrapper for messages ASGI app with logging"""
 
-    # Create authenticated ASGI app
-    auth_app = AuthenticatedMessagesApp(sse_transport.handle_post_message)
+    def __init__(self, app):
+        self.app = app
 
-    # Call the ASGI app - it will send its own response
-    await auth_app(request.scope, request.receive, request._send)
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            # Log incoming request
+            session_id = dict(scope.get("query_string", b"")).get(b"session_id", b"NONE").decode()
+            print(f"📨 [MESSAGES] Received POST /messages")
+            print(f"🔍 [MESSAGES] Session ID: {session_id}")
 
-    # Return an empty response (won't be sent since ASGI app already responded)
-    # This satisfies Starlette's requirement for endpoints to return Response
-    return Response(status_code=202)
+        # Delegate to actual app
+        await self.app(scope, receive, send)
 
-# Add route using add_route to avoid Mount's 307 redirects
-app.add_route("/messages", messages_endpoint, methods=["POST"])
+# Wrap and add route - pass ASGI app directly, not as endpoint
+logging_messages_app = LoggingMessagesApp(auth_messages_app)
+app.add_route("/messages", logging_messages_app, methods=["POST"])
 
 
 # Health check endpoint
