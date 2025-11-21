@@ -266,9 +266,16 @@ class AuthenticatedMessagesApp:
         await self.transport(scope, receive, send)
 
 
-# Add authenticated messages handler to routes (not as mount to avoid redirect)
-from starlette.routing import Mount
-app.routes.append(Mount("/messages", app=AuthenticatedMessagesApp(sse_transport.handle_post_message)))
+# Add authenticated messages handler as raw ASGI route
+# This prevents 307 redirects that Mount would cause
+from starlette.routing import Route
+
+async def messages_route(request):
+    """Route handler that delegates to authenticated ASGI app"""
+    auth_app = AuthenticatedMessagesApp(sse_transport.handle_post_message)
+    await auth_app(request.scope, request.receive, request._send)
+
+app.routes.append(Route("/messages", endpoint=messages_route, methods=["POST"]))
 
 
 # Health check endpoint
