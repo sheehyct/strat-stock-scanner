@@ -253,8 +253,8 @@ async def handle_messages(request: Request):
             content={"detail": f"Invalid token: {str(e)}"}
         )
 
-    # Delegate to SSE transport's message handler
-    return await sse_transport.handle_post_message(
+    # Call ASGI app directly - do NOT return (it handles response itself)
+    await sse_transport.handle_post_message(
         request.scope,
         request.receive,
         request._send
