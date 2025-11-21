@@ -292,8 +292,14 @@ class LoggingMessagesApp:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            # Log incoming request
-            session_id = dict(scope.get("query_string", b"")).get(b"session_id", b"NONE").decode()
+            # Parse query string properly
+            query_string = scope.get("query_string", b"").decode()
+            session_id = "NONE"
+            for param in query_string.split("&"):
+                if param.startswith("session_id="):
+                    session_id = param.split("=", 1)[1]
+                    break
+
             print(f"📨 [MESSAGES] Received POST /messages")
             print(f"🔍 [MESSAGES] Session ID: {session_id}")
 
