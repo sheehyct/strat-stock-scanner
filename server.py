@@ -1,155 +1,237 @@
 """
-STRAT Stock Scanner - Production MCP Server
-OAuth 2.1 authentication with intelligent rate limiting
+STRAT Stock Scanner - Remote MCP Server with OAuth 2.1
+Uses official MCP Python SDK with SSE transport for remote access
 """
 
-from fastapi import FastAPI, Depends
-from fastapi_mcp import FastApiMCP
-import os
-from typing import List, Optional
+import asyncio
+from contextlib import asynccontextmanager
+from mcp.server import Server
+from mcp.server.sse import SseServerTransport
+from mcp.types import Tool, TextContent
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import StreamingResponse
+import uvicorn
 
-# Import new modules
 from config import settings
-from auth_server import router as auth_router
 from auth_middleware import verify_token
-import mcp_tools
+from auth_server import router as auth_router
+import tools
 
+
+# Create MCP server instance
+mcp_server = Server("strat-stock-scanner")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context for FastAPI app"""
+    print(f"🚀 STRAT Stock Scanner MCP Server starting on port {settings.PORT}")
+    print(f"📡 MCP endpoint: /mcp/sse")
+    print(f"🔐 OAuth metadata: /.well-known/oauth-protected-resource")
+    yield
+    print("👋 Server shutting down")
+
+
+# Create FastAPI app for OAuth endpoints
 app = FastAPI(
-    title="Alpaca MCP Server with STRAT Detection",
-    description="Production-ready MCP server with OAuth 2.1 and rate limiting"
+    title="STRAT Stock Scanner MCP Server",
+    description="Remote MCP server with OAuth 2.1 authentication",
+    lifespan=lifespan
 )
 
-# Mount OAuth endpoints
+# Mount OAuth endpoints (authorization, token, metadata)
 app.include_router(auth_router, tags=["OAuth"])
 
-# Initialize MCP server
-mcp = FastApiMCP(app, name="Alpaca Market Data + STRAT")
+
+# Register MCP tools
+@mcp_server.list_tools()
+async def list_tools():
+    """List available STRAT analysis tools"""
+    return [
+        Tool(
+            name="get_stock_quote",
+            description="Get real-time stock quote with bid/ask spread",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "Stock symbol (e.g. AAPL, TSLA, SPY)"
+                    }
+                },
+                "required": ["ticker"]
+            }
+        ),
+        Tool(
+            name="analyze_strat_patterns",
+            description="Analyze stock for STRAT patterns (2-1-2, 3-1-2, 2-2, Rev Strats)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Stock symbol"},
+                    "timeframe": {"type": "string", "default": "1Day", "description": "Bar timeframe (1Day, 1Hour)"},
+                    "days_back": {"type": "integer", "default": 10, "description": "Days of history to analyze"}
+                },
+                "required": ["ticker"]
+            }
+        ),
+        Tool(
+            name="scan_sector_for_strat",
+            description="Scan sector stocks for STRAT patterns - finds existing setups",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "sector": {
+                        "type": "string",
+                        "description": "Sector name (technology, healthcare, energy, financials, consumer, industrials, materials, utilities, real_estate, communications)"
+                    },
+                    "top_n": {"type": "integer", "default": 20, "description": "Number of stocks to scan (max 100)"},
+                    "pattern_filter": {"type": "string", "description": "Optional filter: '2-1-2', '3-1-2', '2-2', 'inside'"}
+                },
+                "required": ["sector"]
+            }
+        ),
+        Tool(
+            name="scan_etf_holdings_strat",
+            description="Scan top holdings of an ETF for STRAT patterns",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "etf": {"type": "string", "description": "ETF symbol (e.g. SPY, QQQ, IWM, XLK, XLF)"},
+                    "top_n": {"type": "integer", "default": 30, "description": "Number of top holdings to scan"}
+                },
+                "required": ["etf"]
+            }
+        ),
+        Tool(
+            name="get_multiple_quotes",
+            description="Get quotes for multiple stocks at once (efficient bulk lookup)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tickers": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of stock symbols (max 50)"
+                    }
+                },
+                "required": ["tickers"]
+            }
+        )
+    ]
 
 
-# Register MCP tools as FastAPI endpoints
-# fastapi-mcp will auto-discover these and expose them as MCP tools
-# Authentication required via verify_token dependency
+@mcp_server.call_tool()
+async def call_tool(name: str, arguments: dict):
+    """Execute STRAT analysis tools"""
+    try:
+        if name == "get_stock_quote":
+            result = await tools.get_stock_quote(arguments["ticker"])
+        elif name == "analyze_strat_patterns":
+            result = await tools.analyze_strat_patterns(
+                arguments["ticker"],
+                arguments.get("timeframe", "1Day"),
+                arguments.get("days_back", 10)
+            )
+        elif name == "scan_sector_for_strat":
+            result = await tools.scan_sector_for_strat(
+                arguments["sector"],
+                arguments.get("top_n", 20),
+                arguments.get("pattern_filter")
+            )
+        elif name == "scan_etf_holdings_strat":
+            result = await tools.scan_etf_holdings_strat(
+                arguments["etf"],
+                arguments.get("top_n", 30)
+            )
+        elif name == "get_multiple_quotes":
+            result = await tools.get_multiple_quotes(arguments["tickers"])
+        else:
+            result = f"Unknown tool: {name}"
 
-@app.post("/tools/get_stock_quote", dependencies=[Depends(verify_token)])
-async def get_stock_quote(ticker: str) -> str:
+        return [TextContent(type="text", text=result)]
+    except Exception as e:
+        error_msg = f"Error executing {name}: {str(e)}"
+        return [TextContent(type="text", text=error_msg)]
+
+
+# SSE endpoint for MCP protocol (requires authentication)
+@app.get("/mcp/sse")
+async def mcp_sse_endpoint(request: Request, _token: dict = Depends(verify_token)):
     """
-    Get real-time stock quote with current price and bid/ask spread.
-
-    Args:
-        ticker: Stock symbol (e.g., 'AAPL', 'MSFT', 'SPY')
+    Server-Sent Events endpoint for MCP protocol
+    Requires OAuth 2.1 authentication via Bearer token
     """
-    return await mcp_tools.get_stock_quote(ticker)
+    async def event_generator():
+        # Create SSE transport
+        transport = SseServerTransport("/mcp/messages")
+
+        # Run MCP server session
+        async with mcp_server.run(
+            transport.read_stream,
+            transport.write_stream,
+            mcp_server.create_initialization_options()
+        ):
+            # Stream events
+            async for message in transport.read_stream:
+                yield message
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
-@app.post("/tools/analyze_strat_patterns", dependencies=[Depends(verify_token)])
-async def analyze_strat_patterns(
-    ticker: str,
-    timeframe: str = "1Day",
-    days_back: int = 10
-) -> str:
-    """
-    Analyze a single stock for STRAT patterns with detailed bar classification.
-
-    Args:
-        ticker: Stock symbol (e.g., 'AAPL', 'TSLA')
-        timeframe: Bar timeframe - '1Day' for daily, '1Hour' for hourly
-        days_back: Number of days of history to analyze
-
-    Returns:
-        Detailed STRAT pattern analysis with bar types and setups
-    """
-    return await mcp_tools.analyze_strat_patterns(ticker, timeframe, days_back)
+# Health check endpoint
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "server": "strat-stock-scanner-mcp",
+        "version": "3.0.0",
+        "mcp_sdk": "official",
+        "features": [
+            "OAuth 2.1 with PKCE",
+            "Intelligent rate limiting (180 req/min)",
+            "SSE transport (official MCP SDK)",
+            "Real-time stock quotes",
+            "STRAT pattern detection"
+        ]
+    }
 
 
-@app.post("/tools/scan_sector_for_strat", dependencies=[Depends(verify_token)])
-async def scan_sector_for_strat(
-    sector: str,
-    top_n: int = 20,
-    pattern_filter: Optional[str] = None
-) -> str:
-    """
-    Scan sector stocks for STRAT patterns - finds existing setups.
-
-    Args:
-        sector: Sector name (technology, healthcare, energy, financials, consumer, industrials, materials, utilities, real_estate, communications)
-        top_n: Number of stocks to scan (default 20, max 100)
-        pattern_filter: Optional filter - '2-1-2' or '3-1-2' or '2-2' or 'inside' (defaults to all)
-
-    Returns:
-        List of stocks showing STRAT patterns with entry levels
-    """
-    return await mcp_tools.scan_sector_for_strat(sector, top_n, pattern_filter)
-
-
-@app.post("/tools/scan_etf_holdings_strat", dependencies=[Depends(verify_token)])
-async def scan_etf_holdings_strat(etf: str, top_n: int = 30) -> str:
-    """
-    Scan top holdings of an ETF for STRAT patterns.
-
-    Args:
-        etf: ETF symbol (e.g., 'SPY', 'QQQ', 'IWM', 'XLK', 'XLF')
-        top_n: Number of top holdings to scan
-
-    Returns:
-        STRAT patterns found in ETF holdings
-    """
-    return await mcp_tools.scan_etf_holdings_strat(etf, top_n)
-
-
-@app.post("/tools/get_multiple_quotes", dependencies=[Depends(verify_token)])
-async def get_multiple_quotes(tickers: List[str]) -> str:
-    """
-    Get quotes for multiple stocks at once (efficient bulk lookup).
-
-    Args:
-        tickers: List of stock symbols (e.g., ['AAPL', 'MSFT', 'GOOGL'])
-    """
-    return await mcp_tools.get_multiple_quotes(tickers)
-
-
-# Mount MCP server at /mcp endpoint
-# fastapi-mcp auto-discovers /tools/* endpoints and exposes them as MCP tools
-# MCP endpoint is automatically mounted at /mcp
-mcp.mount()
-
-
+# Root endpoint with service info
 @app.get("/")
 async def root():
-    """Root endpoint with service information"""
     return {
-        "service": "Alpaca MCP Server with STRAT Detection",
-        "version": "2.0.0",
-        "status": "running",
-        "features": [
-            "OAuth 2.1 authentication with PKCE",
-            "Intelligent rate limiting (180 req/min)",
-            "Real-time stock quotes",
-            "STRAT pattern detection",
-            "Sector scanning (up to 100 stocks)",
-            "ETF holdings analysis"
-        ],
+        "service": "STRAT Stock Scanner MCP Server",
+        "version": "3.0.0",
+        "mcp_sdk": "official (mcp>=1.2.1)",
+        "transport": "SSE (Server-Sent Events)",
         "endpoints": {
-            "mcp": "/mcp (requires authentication)",
+            "mcp": "/mcp/sse (requires authentication)",
             "oauth_metadata": "/.well-known/oauth-protected-resource",
             "authorize": "/authorize",
             "token": "/token",
             "health": "/health"
-        }
-    }
-
-
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "rate_limiter": "active",
-        "authentication": "enabled"
+        },
+        "tools": [
+            "get_stock_quote",
+            "analyze_strat_patterns",
+            "scan_sector_for_strat",
+            "scan_etf_holdings_strat",
+            "get_multiple_quotes"
+        ]
     }
 
 
 if __name__ == "__main__":
-    import uvicorn
+    import os
     port = int(os.getenv("PORT", settings.PORT))
     uvicorn.run(
         app,
