@@ -66,3 +66,17 @@ htmlcov/
 
 # OS
 Thumbs.db
+
+# Internal Documentation (keep local only)
+IMPLEMENTATION_SUMMARY.md
+CLAUDE_WEB_IMPLEMENTATION_BRIEF.md
+HANDOFF.md
+DEBUGGING_SESSION_SUMMARY.md
+docs/claude.md
+
+# Local Test Scripts
+test_local.py
+test_alpaca_direct.py
+
+# Additional untracked files
+momentum_52w_detector.py

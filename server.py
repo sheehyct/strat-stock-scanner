@@ -44,12 +44,12 @@ mcp_server = Server("strat-stock-scanner")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context for FastAPI app"""
-    print(f"🚀 STRAT Stock Scanner MCP Server starting on port {settings.PORT}")
-    print(f"📡 MCP SSE endpoint: /sse")
-    print(f"📨 MCP messages endpoint: /messages")
-    print(f"🔐 OAuth metadata: /.well-known/oauth-protected-resource")
+    print(f"STRAT Stock Scanner MCP Server starting on port {settings.PORT}")
+    print(f"MCP SSE endpoint: /sse")
+    print(f"MCP messages endpoint: /messages")
+    print(f"OAuth metadata: /.well-known/oauth-protected-resource")
     yield
-    print("👋 Server shutting down")
+    print("Server shutting down")
 
 
 # Create FastAPI app for OAuth endpoints
@@ -131,11 +131,12 @@ async def list_tools():
         ),
         Tool(
             name="analyze_tfc",
-            description="Analyze Timeframe Continuity (TFC) across Weekly/Daily/60min/15min timeframes",
+            description="Analyze Timeframe Continuity (TFC) across Monthly/Weekly/Daily/60min/15min timeframes",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "ticker": {"type": "string", "description": "Stock symbol (e.g., AAPL, SPY)"},
+                    "include_monthly": {"type": "boolean", "default": True, "description": "Include monthly timeframe (requires more data)"},
                     "include_weekly": {"type": "boolean", "default": True, "description": "Include weekly timeframe (requires more data)"}
                 },
                 "required": ["ticker"]
@@ -143,7 +144,7 @@ async def list_tools():
         ),
         Tool(
             name="scan_for_tfc_alignment",
-            description="Scan multiple stocks for multi-timeframe alignment (3/4 or 4/4 TFC score)",
+            description="Scan multiple stocks for multi-timeframe alignment (3/5, 4/5 or 5/5 TFC score)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -152,8 +153,9 @@ async def list_tools():
                         "items": {"type": "string"},
                         "description": "List of stock symbols to scan"
                     },
-                    "min_score": {"type": "integer", "default": 3, "description": "Minimum TFC score (1-4, default 3 for 3/4 alignment)"},
+                    "min_score": {"type": "integer", "default": 3, "description": "Minimum TFC score (1-5, default 3 for 3/5 alignment)"},
                     "direction": {"type": "string", "enum": ["bullish", "bearish", "any"], "default": "bullish", "description": "Filter by direction"},
+                    "include_monthly": {"type": "boolean", "default": True, "description": "Include monthly timeframe"},
                     "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars"},
                     "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price"},
                     "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume"}
@@ -182,8 +184,8 @@ async def list_tools():
 @mcp_server.call_tool()
 async def call_tool(name: str, arguments: dict):
     """Execute STRAT analysis tools"""
-    print(f"\n🔧 [TOOL CALL] Tool: {name}")
-    print(f"📋 [TOOL CALL] Arguments: {arguments}")
+    print(f"\n[TOOL CALL] Tool: {name}")
+    print(f"[TOOL CALL] Arguments: {arguments}")
 
     try:
         if name == "get_stock_quote":
@@ -214,6 +216,7 @@ async def call_tool(name: str, arguments: dict):
         elif name == "analyze_tfc":
             result = await tools.analyze_tfc(
                 arguments["ticker"],
+                arguments.get("include_monthly", True),
                 arguments.get("include_weekly", True)
             )
         elif name == "scan_for_tfc_alignment":
@@ -221,6 +224,7 @@ async def call_tool(name: str, arguments: dict):
                 arguments["tickers"],
                 arguments.get("min_score", 3),
                 arguments.get("direction", "bullish"),
+                arguments.get("include_monthly", True),
                 arguments.get("min_atr", 0.0),
                 arguments.get("min_atr_percent", 0.0),
                 arguments.get("min_dollar_volume", 0.0)
@@ -230,11 +234,11 @@ async def call_tool(name: str, arguments: dict):
         else:
             result = f"Unknown tool: {name}"
 
-        print(f"✅ [TOOL CALL] {name} completed successfully")
+        print(f"[TOOL CALL] {name} completed successfully")
         return [TextContent(type="text", text=result)]
     except Exception as e:
         error_msg = f"Error executing {name}: {str(e)}"
-        print(f"❌ [TOOL CALL] {name} failed: {str(e)}")
+        print(f"[ERROR] [TOOL CALL] {name} failed: {str(e)}")
         import traceback
         traceback.print_exc()
         return [TextContent(type="text", text=error_msg)]
@@ -269,15 +273,15 @@ async def handle_sse(request: Request):
     try:
         token = auth_header.split(" ")[1] if " " in auth_header else auth_header
         await validate_token_string(token)
-        print(f"✅ [SSE] Authentication successful")
+        print(f"[SSE] Authentication successful")
     except Exception as e:
-        print(f"❌ [SSE] Authentication failed: {str(e)}")
+        print(f"[ERROR] [SSE] Authentication failed: {str(e)}")
         return JSONResponse(
             status_code=403,
             content={"detail": f"Invalid token: {str(e)}"}
         )
 
-    print(f"🔌 [SSE] Connecting SSE session...")
+    print(f"[SSE] Connecting SSE session...")
 
     # Connect SSE session
     async with sse_transport.connect_sse(
@@ -285,14 +289,14 @@ async def handle_sse(request: Request):
         request.receive,
         request._send
     ) as streams:
-        print(f"✅ [SSE] SSE session connected, starting MCP server...")
+        print(f"[SSE] SSE session connected, starting MCP server...")
         # Run MCP server with the connected streams
         await mcp_server.run(
             streams[0],
             streams[1],
             mcp_server.create_initialization_options()
         )
-        print(f"👋 [SSE] MCP server run completed")
+        print(f"[SSE] MCP server run completed")
 
     # Must return Response to avoid NoneType error
     return Response()
@@ -358,8 +362,8 @@ class LoggingMessagesApp:
                     session_id = param.split("=", 1)[1]
                     break
 
-            print(f"📨 [MESSAGES] Received POST /messages")
-            print(f"🔍 [MESSAGES] Session ID: {session_id}")
+            print(f"[MESSAGES] Received POST /messages")
+            print(f"[MESSAGES] Session ID: {session_id}")
 
         # Delegate to actual app
         await self.app(scope, receive, send)

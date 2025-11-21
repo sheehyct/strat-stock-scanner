@@ -27,21 +27,24 @@ class Bar:
         if not prev_bar:
             return "3"  # First bar defaults to 3
 
-        # Type 1: Inside bar (high < prev high AND low > prev low)
-        if self.high < prev_bar.high and self.low > prev_bar.low:
-            return "1"
+        broke_high = self.high > prev_bar.high
+        broke_low = self.low < prev_bar.low
 
-        # Type 2U: Outside bar up (high > prev high AND low <= prev low)
-        elif self.high > prev_bar.high and self.low <= prev_bar.low:
+        # Type 3: Outside bar (breaks both high AND low)
+        if broke_high and broke_low:
+            return "3"
+
+        # Type 2U: Directional up (breaks high only)
+        elif broke_high and not broke_low:
             return "2U"
 
-        # Type 2D: Outside bar down (high >= prev high AND low < prev low)
-        elif self.high >= prev_bar.high and self.low < prev_bar.low:
+        # Type 2D: Directional down (breaks low only)
+        elif not broke_high and broke_low:
             return "2D"
 
-        # Type 3: Directional bar (doesn't contain or is contained by previous)
+        # Type 1: Inside bar (breaks neither)
         else:
-            return "3"
+            return "1"
 
     def __repr__(self):
         return f"Bar({self.timestamp}, Type: {self.bar_type}, H:{self.high}, L:{self.low})"
@@ -102,14 +105,14 @@ class TimeframeBias:
 @dataclass
 class TFCScore:
     """Timeframe Continuity score and details"""
-    score: int  # 0-4 (number of aligned timeframes)
+    score: int  # 0-5 (number of aligned timeframes)
     quality: str  # A+, A, B, C, D
     aligned_timeframes: List[str]
     dominant_bias: str
     details: List[TimeframeBias]
 
     def __str__(self):
-        return f"TFC {self.score}/4 ({self.quality}) - {self.dominant_bias.upper()} | Aligned: {', '.join(self.aligned_timeframes)}"
+        return f"TFC {self.score}/5 ({self.quality}) - {self.dominant_bias.upper()} | Aligned: {', '.join(self.aligned_timeframes)}"
 
 
 class STRATDetector:
@@ -299,7 +302,7 @@ class STRATDetector:
         details = []
         biases = {"bullish": 0, "bearish": 0, "neutral": 0}
 
-        timeframe_order = ["weekly", "daily", "60min", "15min"]
+        timeframe_order = ["monthly", "weekly", "daily", "60min", "15min"]
 
         for tf in timeframe_order:
             bars = timeframe_data.get(tf, [])
@@ -344,17 +347,17 @@ class STRATDetector:
             dominant = "neutral"
             aligned = []
 
-        # Calculate score (0-4)
+        # Calculate score (0-5)
         score = max(biases["bullish"], biases["bearish"])
 
         # Determine quality grade
-        if score >= 4:
+        if score >= 5:
             quality = "A+"
-        elif score == 3:
+        elif score >= 4:
             quality = "A"
-        elif score == 2:
+        elif score == 3:
             quality = "B"
-        elif score == 1:
+        elif score == 2:
             quality = "C"
         else:
             quality = "D"

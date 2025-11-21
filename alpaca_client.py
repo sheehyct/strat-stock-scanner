@@ -53,9 +53,9 @@ class AlpacaClient:
 
             # Log error for debugging
             if response:
-                print(f"❌ Alpaca quote API error: {response.status_code} - {response.text[:200]}")
+                print(f"[ERROR] Alpaca quote API error: {response.status_code} - {response.text[:200]}")
             else:
-                print(f"❌ Alpaca quote API request failed - no response")
+                print(f"[ERROR] Alpaca quote API request failed - no response")
 
             return None
 
@@ -90,8 +90,8 @@ class AlpacaClient:
             "feed": feed,
             "adjustment": adjustment
         }
-        print(f"🌐 [ALPACA API] GET {url}")
-        print(f"📋 [ALPACA API] Params: {params}")
+        print(f"[ALPACA API] GET {url}")
+        print(f"[ALPACA API] Params: {params}")
 
         async with httpx.AsyncClient() as client:
             response = await alpaca_limiter.make_request(
@@ -106,15 +106,15 @@ class AlpacaClient:
             if response and response.status_code == 200:
                 data = response.json()
                 bars = data.get("bars", [])
-                print(f"✅ [ALPACA API] Success: {len(bars)} bars returned")
+                print(f"[ALPACA API] Success: {len(bars)} bars returned")
                 return bars
 
             # Log error for debugging
             if response:
-                print(f"❌ Alpaca bars API error: {response.status_code}")
-                print(f"📄 Response body: {response.text[:500]}")
+                print(f"[ERROR] Alpaca bars API error: {response.status_code}")
+                print(f"Response body: {response.text[:500]}")
             else:
-                print(f"❌ Alpaca bars API request failed - no response")
+                print(f"[ERROR] Alpaca bars API request failed - no response")
 
             return []
 
@@ -145,8 +145,8 @@ class AlpacaClient:
         start_str = start_date.strftime("%Y-%m-%dT%H:%M:%SZ")
         end_str = end_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        print(f"🔍 [ALPACA] get_bars_recent: ticker={ticker}, days_back={days_back}, timeframe={timeframe}, feed={feed}")
-        print(f"📅 [ALPACA] Date range: {start_str} to {end_str}")
+        print(f"[ALPACA] get_bars_recent: ticker={ticker}, days_back={days_back}, timeframe={timeframe}, feed={feed}")
+        print(f"[ALPACA] Date range: {start_str} to {end_str}")
 
         return await self.get_bars(
             ticker,

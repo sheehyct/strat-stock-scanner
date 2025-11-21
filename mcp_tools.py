@@ -51,11 +51,11 @@ async def analyze_strat_patterns(
     Returns:
         Detailed STRAT pattern analysis with bar types and setups
     """
-    print(f"🔍 [TOOL ENTRY] analyze_strat_patterns: ticker={ticker}, timeframe={timeframe}, days_back={days_back}")
+    print(f"[TOOL ENTRY] analyze_strat_patterns: ticker={ticker}, timeframe={timeframe}, days_back={days_back}")
 
     try:
         # Fetch historical bars using rate-limited client
-        print(f"📊 [API CALL] Fetching bars for {ticker}...")
+        print(f"[API CALL] Fetching bars for {ticker}...")
         bars = await alpaca.get_bars_recent(
             ticker,
             days_back=days_back,
@@ -63,13 +63,13 @@ async def analyze_strat_patterns(
             feed="sip"
         )
 
-        print(f"✅ [API RESPONSE] Received {len(bars) if bars else 0} bars for {ticker}")
+        print(f"[API RESPONSE] Received {len(bars) if bars else 0} bars for {ticker}")
 
         if not bars:
-            print(f"⚠️ [WARNING] No data returned for {ticker}")
+            print(f"[WARNING] No data returned for {ticker}")
             return f"No data available for {ticker}"
     except Exception as e:
-        print(f"❌ [ERROR] analyze_strat_patterns failed: {type(e).__name__}: {str(e)}")
+        print(f"[ERROR] analyze_strat_patterns failed: {type(e).__name__}: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
@@ -109,57 +109,67 @@ async def analyze_strat_patterns(
 
 async def analyze_tfc(
     ticker: str,
+    include_monthly: bool = True,
     include_weekly: bool = True
 ) -> str:
     """
     Analyze Timeframe Continuity (TFC) across multiple timeframes.
 
-    Fetches Weekly, Daily, 60min, and 15min data to score alignment.
+    Fetches Monthly, Weekly, Daily, 60min, and 15min data to score alignment.
 
     Args:
         ticker: Stock symbol (e.g., 'AAPL', 'SPY')
+        include_monthly: Whether to include monthly timeframe (requires more data)
         include_weekly: Whether to include weekly timeframe (requires more data)
 
     Returns:
         TFC score and breakdown by timeframe
     """
-    print(f"🔍 [TOOL ENTRY] analyze_tfc: ticker={ticker}")
+    print(f"[TOOL ENTRY] analyze_tfc: ticker={ticker}")
 
     timeframe_data = {}
 
     try:
         # Fetch each timeframe
+        # Monthly - need ~120 days to get enough monthly bars
+        if include_monthly:
+            print(f"Fetching monthly bars for {ticker}...")
+            monthly_bars = await alpaca.get_bars_recent(
+                ticker, days_back=120, timeframe="1Month", feed="sip"
+            )
+            timeframe_data["monthly"] = monthly_bars if monthly_bars else []
+
         # Weekly - need ~60 days to get enough weekly bars
         if include_weekly:
-            print(f"📊 Fetching weekly bars for {ticker}...")
+            print(f"Fetching weekly bars for {ticker}...")
             weekly_bars = await alpaca.get_bars_recent(
                 ticker, days_back=60, timeframe="1Week", feed="sip"
             )
             timeframe_data["weekly"] = weekly_bars if weekly_bars else []
 
         # Daily - 20 days for pattern detection + ATR
-        print(f"📊 Fetching daily bars for {ticker}...")
+        print(f"Fetching daily bars for {ticker}...")
         daily_bars = await alpaca.get_bars_recent(
             ticker, days_back=20, timeframe="1Day", feed="sip"
         )
         timeframe_data["daily"] = daily_bars if daily_bars else []
 
         # 60min - 10 days worth
-        print(f"📊 Fetching 60min bars for {ticker}...")
+        print(f"Fetching 60min bars for {ticker}...")
         h60_bars = await alpaca.get_bars_recent(
             ticker, days_back=10, timeframe="1Hour", feed="sip"
         )
         timeframe_data["60min"] = h60_bars if h60_bars else []
 
         # 15min - 5 days worth
-        print(f"📊 Fetching 15min bars for {ticker}...")
+        print(f"Fetching 15min bars for {ticker}...")
         m15_bars = await alpaca.get_bars_recent(
             ticker, days_back=5, timeframe="15Min", feed="sip"
         )
         timeframe_data["15min"] = m15_bars if m15_bars else []
 
     except Exception as e:
-        print(f"❌ [ERROR] analyze_tfc failed: {type(e).__name__}: {str(e)}")
+        print(f"[ERROR] analyze_tfc failed: {type(e).__name__}: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
@@ -178,7 +188,7 @@ async def analyze_tfc(
     # Add pattern details for each timeframe
     report += "\n**Pattern Details:**\n"
 
-    tf_names = {"weekly": "Weekly", "daily": "Daily", "60min": "60min", "15min": "15min"}
+    tf_names = {"monthly": "Monthly", "weekly": "Weekly", "daily": "Daily", "60min": "60min", "15min": "15min"}
     for tf_key, tf_name in tf_names.items():
         bars = timeframe_data.get(tf_key, [])
         if bars:
@@ -413,6 +423,7 @@ async def scan_for_tfc_alignment(
     tickers: List[str],
     min_score: int = 3,
     direction: str = "bullish",
+    include_monthly: bool = True,
     min_atr: float = 0.0,
     min_atr_percent: float = 0.0,
     min_dollar_volume: float = 0.0
@@ -420,12 +431,13 @@ async def scan_for_tfc_alignment(
     """
     Scan multiple stocks for Timeframe Continuity alignment.
 
-    Finds stocks with 3/4 or 4/4 timeframes aligned in same direction.
+    Finds stocks with 3/5, 4/5 or 5/5 timeframes aligned in same direction.
 
     Args:
         tickers: List of stock symbols to scan
-        min_score: Minimum TFC score (1-4, default 3 for 3/4 alignment)
+        min_score: Minimum TFC score (1-5, default 3 for 3/5 alignment)
         direction: Filter by direction - 'bullish', 'bearish', or 'any'
+        include_monthly: Whether to include monthly timeframe (requires more data)
         min_atr: Minimum ATR in dollars
         min_atr_percent: Minimum ATR as % of price
         min_dollar_volume: Minimum dollar volume
@@ -433,7 +445,7 @@ async def scan_for_tfc_alignment(
     Returns:
         Ranked list of stocks with TFC scores
     """
-    print(f"🔍 [TOOL ENTRY] scan_for_tfc_alignment: {len(tickers)} tickers, min_score={min_score}, direction={direction}")
+    print(f"[TOOL ENTRY] scan_for_tfc_alignment: {len(tickers)} tickers, min_score={min_score}, direction={direction}")
 
     results = []
     filtered_count = 0
@@ -442,6 +454,13 @@ async def scan_for_tfc_alignment(
         try:
             # Fetch all timeframes
             timeframe_data = {}
+
+            # Monthly
+            if include_monthly:
+                monthly_bars = await alpaca.get_bars_recent(
+                    ticker, days_back=120, timeframe="1Month", feed="sip"
+                )
+                timeframe_data["monthly"] = monthly_bars if monthly_bars else []
 
             # Weekly
             weekly_bars = await alpaca.get_bars_recent(
@@ -489,7 +508,7 @@ async def scan_for_tfc_alignment(
                     })
 
         except Exception as e:
-            print(f"⚠️ Error scanning {ticker}: {e}")
+            print(f"[WARNING] Error scanning {ticker}: {e}")
             continue
 
     if not results:
@@ -499,7 +518,7 @@ async def scan_for_tfc_alignment(
     results.sort(key=lambda x: (x['tfc'].score, x['metrics'].atr_percent), reverse=True)
 
     # Format output
-    output = f"**TFC Alignment Scan** - {len(results)} stocks with {min_score}/4+ {direction} alignment\n"
+    output = f"**TFC Alignment Scan** - {len(results)} stocks with {min_score}/5+ {direction} alignment\n"
     if filtered_count > 0:
         output += f"({filtered_count} filtered by ATR/volume)\n"
     output += "\n"
@@ -510,7 +529,7 @@ async def scan_for_tfc_alignment(
         ticker = result['ticker']
 
         bias_marker = "[BULL]" if tfc.dominant_bias == "bullish" else "[BEAR]"
-        output += f"{i}. {bias_marker} **{ticker}** - TFC {tfc.score}/4 ({tfc.quality})\n"
+        output += f"{i}. {bias_marker} **{ticker}** - TFC {tfc.score}/5 ({tfc.quality})\n"
         output += f"   Aligned: {', '.join(tfc.aligned_timeframes)}\n"
         output += f"   Metrics: {metrics}\n"
 

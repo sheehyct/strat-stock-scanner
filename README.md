@@ -1,22 +1,23 @@
 # STRAT Stock Scanner
 
-Production-ready mobile stock scanner with OAuth 2.1 authentication and intelligent rate limiting.
+Production-ready MCP server providing systematic technical analysis using Rob Smith's STRAT methodology with OAuth 2.1 authentication and intelligent rate limiting.
 
 ## Overview
 
-This project provides real-time stock scanning capabilities using Rob Smith's STRAT methodology. The scanner is deployed as a remote MCP server on Railway, making it accessible from Claude mobile/desktop anywhere with an internet connection.
+Remote MCP server enabling real-time stock analysis using the STRAT methodology. Deploy once to Railway and access from Claude Desktop or mobile anywhere with an internet connection. Designed for traders requiring mobile-accessible pattern detection and multi-timeframe analysis.
 
-**Use Case:** Firefighter/trader needing mobile access to STRAT pattern detection during 24-hour shifts.
-
-**Version:** 2.0.0 - Production release with OAuth and rate limiting
+**Version:** 2.1.0 - Multi-timeframe continuity analysis with corrected bar classification
 
 ## Features
 
 ### Core Features
 - Real-time stock quotes via Alpaca API
-- STRAT pattern detection (2-1-2, 3-1-2, 2-2, inside bars)
+- STRAT pattern detection (2-1-2, 3-1-2, 2-2, Rev Strats)
+- Timeframe Continuity (TFC) analysis across 5 timeframes (monthly, weekly, daily, 60min, 15min)
+- Multi-timeframe alignment scoring (0-5 scale with quality grades)
 - Sector-wide scanning (up to 100 stocks per scan)
 - ETF holdings analysis (SPY, QQQ, IWM, etc.)
+- ATR and volume filtering for scanner results
 - Bulk quote lookups (up to 50 stocks)
 - Mobile-accessible via Claude MCP connector
 
@@ -31,14 +32,17 @@ This project provides real-time stock scanning capabilities using Rob Smith's ST
 ## STRAT Patterns Detected
 
 ### High Confidence
-- **2-1-2 Reversals**: Outside bar → Inside bar → Outside bar (opposite direction)
-- **3-1-2 Continuations**: Directional bar → Inside bar → Outside bar (same direction)
+- **2-1-2 Reversals**: 2U/2D → 1 → 2U/2D (reversal direction, live entry at inside bar high/low)
+- **3-1-2 Continuations**: 3 → 1 → 2U/2D (same direction, live entry at inside bar high/low)
 
 ### Medium Confidence
-- **2-2 Combos**: Consecutive outside bars (volatile expansion)
+- **2-2 Combos**: Consecutive 2U or 2D bars (directional momentum, entry after bar close)
+- **Rev Strats**: Reversal patterns based on multi-bar sequences
 
-### Low Confidence
-- **Inside Bar Setups**: Watch for breakout direction
+### Timeframe Continuity
+- **TFC Scores**: 0-5 alignment across monthly, weekly, daily, 60min, 15min
+- **Quality Grades**: A+ (5/5), A (4/5), B (3/5), C (2/5), D (0-1/5)
+- **Directional Bias**: Bullish, bearish, or neutral based on dominant pattern alignment
 
 ## Project Structure
 
@@ -212,6 +216,18 @@ Scan energy sector for only 2-1-2 reversal patterns.
 Get current quotes for AAPL, MSFT, NVDA, TSLA, GOOGL
 ```
 
+**Timeframe Continuity Analysis:**
+```
+Analyze AAPL for timeframe continuity across all 5 timeframes.
+Which timeframes are aligned bullish?
+```
+
+**TFC Scanner:**
+```
+Scan technology sector for stocks with 4/5 or 5/5 bullish TFC alignment.
+Filter for minimum 2% ATR and $50M daily volume.
+```
+
 ## MCP Tools
 
 ### get_stock_quote
@@ -228,6 +244,37 @@ Deep STRAT analysis on a single stock with bar classification.
 - `timeframe`: '1Day' or '1Hour' (default: '1Day')
 - `days_back`: History to analyze (default: 10)
 
+### analyze_tfc
+Analyze Timeframe Continuity across 5 timeframes (monthly, weekly, daily, 60min, 15min).
+
+**Parameters:**
+- `ticker`: Stock symbol
+- `include_monthly`: Include monthly timeframe (default: true, requires ~120 days data)
+- `include_weekly`: Include weekly timeframe (default: true, requires ~60 days data)
+
+**Returns:**
+- TFC score (0-5) with quality grade
+- Dominant directional bias (bullish/bearish/neutral)
+- Pattern details for each timeframe
+- Stock metrics (price, ATR, volume)
+
+### scan_for_tfc_alignment
+Scan multiple stocks for timeframe continuity alignment.
+
+**Parameters:**
+- `tickers`: List of stock symbols to scan
+- `min_score`: Minimum TFC score (1-5, default: 3 for 3/5 alignment)
+- `direction`: Filter by direction ('bullish', 'bearish', 'any')
+- `include_monthly`: Include monthly timeframe (default: true)
+- `min_atr`: Minimum ATR in dollars (default: 0.0)
+- `min_atr_percent`: Minimum ATR as percentage of price (default: 0.0)
+- `min_dollar_volume`: Minimum daily dollar volume (default: 0.0)
+
+**Returns:**
+- Ranked list of stocks by TFC score and ATR percentage
+- Aligned timeframes for each stock
+- Stock metrics and pattern details
+
 ### scan_sector_for_strat
 Scan entire sector for STRAT patterns with intelligent rate limiting.
 
@@ -235,6 +282,9 @@ Scan entire sector for STRAT patterns with intelligent rate limiting.
 - `sector`: Sector name (technology, healthcare, energy, etc.)
 - `top_n`: Number of stocks to scan (default: 20, max: 100)
 - `pattern_filter`: Optional ('2-1-2', '3-1-2', '2-2', 'inside')
+- `min_atr`: Minimum ATR in dollars (default: 0.0)
+- `min_atr_percent`: Minimum ATR as percentage of price (default: 0.0)
+- `min_dollar_volume`: Minimum daily dollar volume (default: 0.0)
 
 **Rate Limiting:**
 - Automatically throttled to stay under 180 requests/minute
@@ -247,6 +297,9 @@ Scan ETF top holdings for patterns.
 **Parameters:**
 - `etf`: ETF symbol (SPY, QQQ, IWM, XLK, XLF, XLE, XLV)
 - `top_n`: Number of holdings to scan (default: 30)
+- `min_atr`: Minimum ATR in dollars (default: 0.0)
+- `min_atr_percent`: Minimum ATR as percentage of price (default: 0.0)
+- `min_dollar_volume`: Minimum daily dollar volume (default: 0.0)
 
 ### get_multiple_quotes
 Bulk quote lookup (up to 50 stocks).
@@ -259,21 +312,38 @@ Bulk quote lookup (up to 50 stocks).
 ### Bar Classification
 
 **Type 1 (Inside Bar):**
-- High < Previous High AND Low > Previous Low
-- Consolidation/indecision
-- Watch for breakout
+- High <= Previous High AND Low >= Previous Low
+- Breaks neither bound
+- Consolidation/indecision, watch for breakout
 
-**Type 2U (Outside Bar Up):**
-- High > Previous High AND Low <= Previous Low
-- Bullish expansion
+**Type 2U (Directional Up):**
+- High > Previous High AND Low >= Previous Low
+- Breaks high only
+- Bullish directional move
 
-**Type 2D (Outside Bar Down):**
-- High >= Previous High AND Low < Previous Low
-- Bearish expansion
+**Type 2D (Directional Down):**
+- High <= Previous High AND Low < Previous Low
+- Breaks low only
+- Bearish directional move
 
-**Type 3 (Directional):**
-- Neither inside nor outside
-- Continuation or new direction
+**Type 3 (Outside Bar):**
+- High > Previous High AND Low < Previous Low
+- Breaks both high and low
+- Expansion/volatility bar
+
+### Timeframe Continuity Scoring
+
+**TFC Score Calculation:**
+- Each timeframe adds 1 point if aligned in same direction
+- Maximum score: 5/5 (all timeframes aligned)
+- Minimum for quality setups: 3/5 (3 timeframes aligned)
+
+**Quality Grades:**
+- A+ (5/5): Perfect alignment across all timeframes
+- A (4/5): Strong alignment, 4 timeframes agree
+- B (3/5): Good alignment, 3 timeframes agree
+- C (2/5): Weak alignment, only 2 timeframes
+- D (0-1/5): No meaningful alignment
 
 ### Data Source
 
@@ -371,17 +441,15 @@ npx @modelcontextprotocol/inspector uv run python server.py
 - Maximum 3 concurrent requests to prevent overload
 - Progress logging for large scans
 
-## Future Enhancements
-
-- Multi-timeframe analysis (daily + weekly alignment)
-- Volume confirmation for pattern confidence
-- Caching layer with Railway Redis
-- Portfolio integration (track existing positions)
-- Webhook alerts for watchlist patterns
-
 ## Contributing
 
-This is a personal project, but suggestions are welcome. Please follow the development guidelines in `docs/claude.md`.
+Contributions are welcome. When contributing:
+
+1. Follow professional development standards (no emojis in code, plain ASCII text only)
+2. Test thoroughly with the local test suite before submitting
+3. Include unit tests for new features
+4. Update documentation to reflect changes
+5. Use conventional commit format (feat:, fix:, docs:, test:, refactor:)
 
 ## License
 
