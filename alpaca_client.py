@@ -51,6 +51,12 @@ class AlpacaClient:
                 data = response.json()
                 return data.get("quote")
 
+            # Log error for debugging
+            if response:
+                print(f"❌ Alpaca quote API error: {response.status_code} - {response.text[:200]}")
+            else:
+                print(f"❌ Alpaca quote API request failed - no response")
+
             return None
 
     async def get_bars(
@@ -95,6 +101,12 @@ class AlpacaClient:
             if response and response.status_code == 200:
                 data = response.json()
                 return data.get("bars", [])
+
+            # Log error for debugging
+            if response:
+                print(f"❌ Alpaca bars API error: {response.status_code} - {response.text[:200]}")
+            else:
+                print(f"❌ Alpaca bars API request failed - no response")
 
             return []
 

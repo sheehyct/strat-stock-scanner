@@ -279,6 +279,20 @@ async def health():
     }
 
 
+# Debug endpoint to check config (without exposing secrets)
+@app.get("/debug/config")
+async def debug_config():
+    """Check if required environment variables are set"""
+    return {
+        "alpaca_api_key_set": bool(settings.ALPACA_API_KEY and len(settings.ALPACA_API_KEY) > 0),
+        "alpaca_api_secret_set": bool(settings.ALPACA_API_SECRET and len(settings.ALPACA_API_SECRET) > 0),
+        "alpaca_base_url": settings.ALPACA_BASE_URL,
+        "jwt_secret_set": bool(settings.JWT_SECRET_KEY and len(settings.JWT_SECRET_KEY) > 0),
+        "server_url": settings.SERVER_URL,
+        "api_key_prefix": settings.ALPACA_API_KEY[:4] + "..." if settings.ALPACA_API_KEY else "NOT SET"
+    }
+
+
 # Root endpoint with service info
 @app.get("/")
 async def root():
