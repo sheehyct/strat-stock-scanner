@@ -4,7 +4,7 @@ OAuth 2.1 authentication with intelligent rate limiting
 """
 
 from fastapi import FastAPI, Depends
-from mcp.server.fastmcp import FastMCP
+from fastapi_mcp import FastApiMCP
 import os
 from typing import List, Optional
 
@@ -19,11 +19,11 @@ app = FastAPI(
     description="Production-ready MCP server with OAuth 2.1 and rate limiting"
 )
 
-# Initialize MCP server
-mcp = FastMCP("Alpaca Market Data + STRAT")
-
 # Mount OAuth endpoints
 app.include_router(auth_router, tags=["OAuth"])
+
+# Initialize MCP server
+mcp = FastApiMCP(app, name="Alpaca Market Data + STRAT")
 
 
 # Register MCP tools with authentication
@@ -107,13 +107,8 @@ async def get_multiple_quotes(tickers: List[str]) -> str:
 
 
 # Mount MCP server at /mcp endpoint with authentication
-# Authentication is applied via dependency on the router
-app.include_router(
-    mcp.router,
-    prefix="/mcp",
-    dependencies=[Depends(verify_token)],
-    tags=["MCP"]
-)
+# Authentication is applied via dependency
+mcp.mount(prefix="/mcp", dependencies=[Depends(verify_token)])
 
 
 @app.get("/")
