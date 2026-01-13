@@ -36,8 +36,22 @@ Remote MCP server enabling real-time stock analysis using the STRAT methodology.
 - **3-1-2 Continuations**: 3 → 1 → 2U/2D (same direction, live entry at inside bar high/low)
 
 ### Medium Confidence
-- **2-2 Combos**: Consecutive 2U or 2D bars (directional momentum, entry after bar close)
+- **2-2 Reversals**: 2D -> 2U (bullish) or 2U -> 2D (bearish) - actionable entry signals
 - **Rev Strats**: Reversal patterns based on multi-bar sequences
+
+### Low Confidence (Not Entry Signals)
+- **2-2 Continuations**: Consecutive 2U or 2D bars - for position management only, watch for exhaustion
+
+### Setups (Awaiting Confirmation)
+- **2-1 Setup**: 2U/2D -> 1 - potential 2-1-2 reversal awaiting breakout
+- **3-1 Setup**: 3 -> 1 - potential 3-1-2 continuation awaiting breakout
+- **Inside Bar Setup**: Generic inside bar with breakout levels
+
+### Forming Bar Detection
+For intraday timeframes (15min, 60min), the scanner identifies bars that are still forming:
+- Forming bars are marked with "(forming)" in the output
+- Bar type reflects current price action (what boundaries have been broken so far)
+- Type 1 (inside) bars that are forming may still become Type 2 or Type 3
 
 ### Timeframe Continuity
 - **TFC Scores**: 0-5 alignment across monthly, weekly, daily, 60min, 15min
@@ -335,6 +349,7 @@ Bulk quote lookup (up to 50 stocks).
 
 **TFC Score Calculation:**
 - Each timeframe adds 1 point if aligned in same direction
+- Type 1 (inside) bars count as neutral/indecision - they do NOT add to directional alignment
 - Maximum score: 5/5 (all timeframes aligned)
 - Minimum for quality setups: 3/5 (3 timeframes aligned)
 

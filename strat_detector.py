@@ -6,8 +6,9 @@ Includes ATR/Volume metrics and TFC scoring
 """
 
 from typing import List, Dict, Optional, Literal, Tuple
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
+import pytz
 
 BarType = Literal["1", "2U", "2D", "3"]
 
@@ -21,6 +22,7 @@ class Bar:
         self.close = close
         self.volume = volume
         self.bar_type: Optional[BarType] = None
+        self.is_forming: bool = False  # True if bar is still forming (intraday)
 
     def classify_vs_previous(self, prev_bar: 'Bar') -> BarType:
         """Classify bar type relative to previous bar"""
@@ -47,7 +49,8 @@ class Bar:
             return "1"
 
     def __repr__(self):
-        return f"Bar({self.timestamp}, Type: {self.bar_type}, H:{self.high}, L:{self.low})"
+        forming_str = " (forming)" if self.is_forming else ""
+        return f"Bar({self.timestamp}, Type: {self.bar_type}{forming_str}, H:{self.high}, L:{self.low})"
 
 
 class STRATPattern:
@@ -100,6 +103,7 @@ class TimeframeBias:
     pattern: Optional[str]
     bar_type: str
     confidence: str
+    is_forming: bool = False  # True if bar is still forming
 
 
 @dataclass
@@ -118,9 +122,85 @@ class TFCScore:
 class STRATDetector:
     """Main STRAT pattern detection engine"""
 
+    # Timeframe to minutes mapping for forming bar detection
+    TIMEFRAME_MINUTES = {
+        "1Min": 1,
+        "5Min": 5,
+        "15Min": 15,
+        "30Min": 30,
+        "1Hour": 60,
+        "1Day": 1440,  # Daily bars - typically don't need forming check
+        "1Week": 10080,
+        "1Month": 43200,
+    }
+
     @staticmethod
-    def classify_bars(bars: List[Dict]) -> List[Bar]:
-        """Convert raw bar data to classified Bar objects"""
+    def is_bar_forming(bar_timestamp: str, timeframe: str = "1Day") -> bool:
+        """
+        Determine if a bar is still forming based on timestamp and timeframe.
+
+        For intraday timeframes (15min, 60min), checks if the bar's timestamp
+        falls within the current time period.
+
+        Args:
+            bar_timestamp: ISO format timestamp from bar data
+            timeframe: Alpaca timeframe string (e.g., '1Hour', '15Min', '1Day')
+
+        Returns:
+            True if the bar is still forming, False if closed
+        """
+        try:
+            # Parse bar timestamp
+            if 'T' in bar_timestamp:
+                # ISO format with time
+                bar_dt = datetime.fromisoformat(bar_timestamp.replace('Z', '+00:00'))
+            else:
+                # Date only - assume market close (daily bars)
+                bar_dt = datetime.strptime(bar_timestamp, '%Y-%m-%d')
+                bar_dt = bar_dt.replace(tzinfo=timezone.utc)
+
+            # Get current time in US Eastern
+            eastern = pytz.timezone('America/New_York')
+            now = datetime.now(eastern)
+
+            # For daily and higher timeframes, bars are always closed at end of day
+            if timeframe in ["1Day", "1Week", "1Month"]:
+                # Daily bars: check if bar is from today and market is still open
+                bar_date = bar_dt.astimezone(eastern).date()
+                today = now.date()
+                if bar_date == today:
+                    # Market hours: 9:30 AM - 4:00 PM ET
+                    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+                    if now < market_close:
+                        return True
+                return False
+
+            # For intraday timeframes
+            minutes = STRATDetector.TIMEFRAME_MINUTES.get(timeframe, 60)
+            bar_dt_eastern = bar_dt.astimezone(eastern)
+
+            # Calculate bar end time
+            bar_end = bar_dt_eastern + timedelta(minutes=minutes)
+
+            # Bar is forming if current time is before bar end
+            return now < bar_end
+
+        except Exception as e:
+            # On error, assume bar is closed (conservative)
+            return False
+
+    @staticmethod
+    def classify_bars(bars: List[Dict], timeframe: str = "1Day") -> List[Bar]:
+        """
+        Convert raw bar data to classified Bar objects.
+
+        Args:
+            bars: List of OHLCV bar dictionaries
+            timeframe: Alpaca timeframe string for forming bar detection
+
+        Returns:
+            List of classified Bar objects
+        """
         bar_objects = []
 
         for bar_data in bars:
@@ -140,6 +220,11 @@ class STRATDetector:
                 bar.bar_type = "3"
             else:
                 bar.bar_type = bar.classify_vs_previous(bar_objects[i-1])
+
+        # Mark last bar as forming if applicable (for intraday timeframes)
+        if bar_objects and timeframe in ["1Hour", "15Min", "30Min", "5Min", "1Min"]:
+            last_bar = bar_objects[-1]
+            last_bar.is_forming = STRATDetector.is_bar_forming(last_bar.timestamp, timeframe)
 
         return bar_objects
 
@@ -245,21 +330,22 @@ class STRATDetector:
         )
 
     @staticmethod
-    def get_timeframe_bias(bars: List[Dict]) -> Tuple[str, Optional[str], str]:
+    def get_timeframe_bias(bars: List[Dict], timeframe: str = "1Day") -> Tuple[str, Optional[str], str, bool]:
         """
         Determine bias for a timeframe based on recent bar action
 
         Returns:
-            Tuple of (bias, pattern_type, last_bar_type)
+            Tuple of (bias, pattern_type, last_bar_type, is_forming)
         """
         if not bars or len(bars) < 2:
-            return ("neutral", None, "?")
+            return ("neutral", None, "?", False)
 
-        classified = STRATDetector.classify_bars(bars)
-        patterns = STRATDetector.scan_for_patterns(bars)
+        classified = STRATDetector.classify_bars(bars, timeframe)
+        patterns = STRATDetector.scan_for_patterns(bars, timeframe)
 
         last_bar = classified[-1]
         last_bar_type = last_bar.bar_type
+        is_forming = last_bar.is_forming
 
         # Determine bias from patterns first
         if patterns:
@@ -269,23 +355,23 @@ class STRATDetector:
 
             if bullish_patterns and (not bearish_patterns or
                 bullish_patterns[0].confidence >= bearish_patterns[0].confidence):
-                return ("bullish", bullish_patterns[0].pattern_type, last_bar_type)
+                return ("bullish", bullish_patterns[0].pattern_type, last_bar_type, is_forming)
             elif bearish_patterns:
-                return ("bearish", bearish_patterns[0].pattern_type, last_bar_type)
+                return ("bearish", bearish_patterns[0].pattern_type, last_bar_type, is_forming)
 
         # Fall back to last bar type
         if last_bar_type == "2U":
-            return ("bullish", None, last_bar_type)
+            return ("bullish", None, last_bar_type, is_forming)
         elif last_bar_type == "2D":
-            return ("bearish", None, last_bar_type)
+            return ("bearish", None, last_bar_type, is_forming)
         elif last_bar_type == "3":
             # Check close vs open for directional 3
             if last_bar.close > last_bar.open:
-                return ("bullish", None, last_bar_type)
+                return ("bullish", None, last_bar_type, is_forming)
             elif last_bar.close < last_bar.open:
-                return ("bearish", None, last_bar_type)
+                return ("bearish", None, last_bar_type, is_forming)
 
-        return ("neutral", None, last_bar_type)
+        return ("neutral", None, last_bar_type, is_forming)
 
     @staticmethod
     def calculate_tfc_score(timeframe_data: Dict[str, List[Dict]]) -> TFCScore:
@@ -302,25 +388,37 @@ class STRATDetector:
         details = []
         biases = {"bullish": 0, "bearish": 0, "neutral": 0}
 
+        # Map internal names to Alpaca timeframe strings
+        timeframe_mapping = {
+            "monthly": "1Month",
+            "weekly": "1Week",
+            "daily": "1Day",
+            "60min": "1Hour",
+            "15min": "15Min"
+        }
+
         timeframe_order = ["monthly", "weekly", "daily", "60min", "15min"]
 
         for tf in timeframe_order:
             bars = timeframe_data.get(tf, [])
+            alpaca_tf = timeframe_mapping.get(tf, "1Day")
+
             if not bars:
                 details.append(TimeframeBias(
                     timeframe=tf,
                     bias="neutral",
                     pattern=None,
                     bar_type="?",
-                    confidence="none"
+                    confidence="none",
+                    is_forming=False
                 ))
                 biases["neutral"] += 1
                 continue
 
-            bias, pattern, bar_type = STRATDetector.get_timeframe_bias(bars)
+            bias, pattern, bar_type, is_forming = STRATDetector.get_timeframe_bias(bars, alpaca_tf)
 
             # Get confidence from pattern if available
-            patterns = STRATDetector.scan_for_patterns(bars)
+            patterns = STRATDetector.scan_for_patterns(bars, alpaca_tf)
             confidence = "none"
             if patterns:
                 matching = [p for p in patterns if p.direction == bias]
@@ -332,9 +430,16 @@ class STRATDetector:
                 bias=bias,
                 pattern=pattern,
                 bar_type=bar_type,
-                confidence=confidence
+                confidence=confidence,
+                is_forming=is_forming
             ))
-            biases[bias] += 1
+
+            # Type 1 (inside) bars should NOT count toward TFC alignment
+            # They represent indecision, not directional bias
+            if bar_type == "1":
+                biases["neutral"] += 1
+            else:
+                biases[bias] += 1
 
         # Determine dominant bias
         if biases["bullish"] > biases["bearish"]:
@@ -375,15 +480,19 @@ class STRATDetector:
         """
         Detect 2-1-2 reversal pattern (most reliable STRAT setup)
         Pattern: 2U/2D -> 1 -> 2U/2D (opposite direction)
+
+        Only reports confirmed patterns where the breakout has occurred.
+        If the last bar is still Type 1, this returns None (use detect_2_1_setup instead).
         """
         if len(bars) < 3:
             return None
 
-        # Check last 3 bars for 2-1-2
-        for i in range(len(bars) - 2):
+        # Focus on the LAST 3 bars for current trading signals
+        # Check from most recent to oldest to find the nearest pattern
+        for i in range(len(bars) - 3, -1, -1):
             bar1, bar2, bar3 = bars[i], bars[i+1], bars[i+2]
 
-            # Bullish 2-1-2: 2D -> 1 -> 2U
+            # Bullish 2-1-2: 2D -> 1 -> 2U (breakout must have occurred)
             if bar1.bar_type == "2D" and bar2.bar_type == "1" and bar3.bar_type == "2U":
                 return STRATPattern(
                     pattern_type="2-1-2 Reversal",
@@ -393,7 +502,7 @@ class STRATDetector:
                     description=f"Bullish 2-1-2: Reversal from low ${bar1.low:.2f} through inside bar, breaking to ${bar3.high:.2f}"
                 )
 
-            # Bearish 2-1-2: 2U -> 1 -> 2D
+            # Bearish 2-1-2: 2U -> 1 -> 2D (breakout must have occurred)
             elif bar1.bar_type == "2U" and bar2.bar_type == "1" and bar3.bar_type == "2D":
                 return STRATPattern(
                     pattern_type="2-1-2 Reversal",
@@ -406,15 +515,59 @@ class STRATDetector:
         return None
 
     @staticmethod
+    def detect_2_1_setup(bars: List[Bar]) -> Optional[STRATPattern]:
+        """
+        Detect 2-1 Setup - a potential 2-1-2 pattern awaiting breakout.
+        Pattern: 2U/2D -> 1 (last bar is inside bar, awaiting breakout)
+
+        This is NOT a confirmed pattern - it's a setup awaiting confirmation.
+        Reports the breakout levels to watch.
+        """
+        if len(bars) < 2:
+            return None
+
+        # Check the LAST 2 bars only - this is a current setup
+        bar1, bar2 = bars[-2], bars[-1]
+
+        # Only valid if the current (last) bar is an inside bar (Type 1)
+        if bar2.bar_type != "1":
+            return None
+
+        # Bullish setup: 2D -> 1 (awaiting breakout above inside bar high)
+        if bar1.bar_type == "2D":
+            return STRATPattern(
+                pattern_type="2-1 Setup",
+                bars=[bar1, bar2],
+                direction="bullish",
+                confidence="low",
+                description=f"2-1 Setup (bullish potential): Awaiting breakout above ${bar2.high:.2f} for 2-1-2U or below ${bar2.low:.2f}"
+            )
+
+        # Bearish setup: 2U -> 1 (awaiting breakout below inside bar low)
+        elif bar1.bar_type == "2U":
+            return STRATPattern(
+                pattern_type="2-1 Setup",
+                bars=[bar1, bar2],
+                direction="bearish",
+                confidence="low",
+                description=f"2-1 Setup (bearish potential): Awaiting breakout below ${bar2.low:.2f} for 2-1-2D or above ${bar2.high:.2f}"
+            )
+
+        return None
+
+    @staticmethod
     def detect_3_1_2_continuation(bars: List[Bar]) -> Optional[STRATPattern]:
         """
         Detect 3-1-2 continuation pattern
         Pattern: 3 (directional) -> 1 (inside) -> 2 (breakout in same direction)
+
+        Only reports confirmed patterns where the breakout has occurred.
         """
         if len(bars) < 3:
             return None
 
-        for i in range(len(bars) - 2):
+        # Check from most recent to oldest to find the nearest pattern
+        for i in range(len(bars) - 3, -1, -1):
             bar1, bar2, bar3 = bars[i], bars[i+1], bars[i+2]
 
             if bar1.bar_type == "3" and bar2.bar_type == "1":
@@ -441,10 +594,50 @@ class STRATDetector:
         return None
 
     @staticmethod
-    def detect_2_2_combo(bars: List[Bar]) -> Optional[STRATPattern]:
+    def detect_3_1_setup(bars: List[Bar]) -> Optional[STRATPattern]:
         """
-        Detect 2-2 combo (volatile expansion pattern)
-        Pattern: 2 -> 2 (consecutive outside bars)
+        Detect 3-1 Setup - a potential 3-1-2 pattern awaiting breakout.
+        Pattern: 3 -> 1 (last bar is inside bar, awaiting breakout)
+
+        This is NOT a confirmed pattern - it's a setup awaiting confirmation.
+        """
+        if len(bars) < 2:
+            return None
+
+        # Check the LAST 2 bars only - this is a current setup
+        bar1, bar2 = bars[-2], bars[-1]
+
+        # Only valid if the current (last) bar is an inside bar (Type 1)
+        if bar2.bar_type != "1" or bar1.bar_type != "3":
+            return None
+
+        # Bullish setup: 3 up -> 1 (awaiting breakout above inside bar high)
+        if bar1.close > bar1.open:
+            return STRATPattern(
+                pattern_type="3-1 Setup",
+                bars=[bar1, bar2],
+                direction="bullish",
+                confidence="low",
+                description=f"3-1 Setup (bullish): Awaiting breakout above ${bar2.high:.2f} for 3-1-2U continuation"
+            )
+
+        # Bearish setup: 3 down -> 1 (awaiting breakout below inside bar low)
+        elif bar1.close < bar1.open:
+            return STRATPattern(
+                pattern_type="3-1 Setup",
+                bars=[bar1, bar2],
+                direction="bearish",
+                confidence="low",
+                description=f"3-1 Setup (bearish): Awaiting breakout below ${bar2.low:.2f} for 3-1-2D continuation"
+            )
+
+        return None
+
+    @staticmethod
+    def detect_2_2_reversal(bars: List[Bar]) -> Optional[STRATPattern]:
+        """
+        Detect 2-2 Reversal pattern (actionable entry signal)
+        Pattern: 2D -> 2U (bullish reversal) or 2U -> 2D (bearish reversal)
         """
         if len(bars) < 2:
             return None
@@ -452,24 +645,58 @@ class STRATDetector:
         for i in range(len(bars) - 1):
             bar1, bar2 = bars[i], bars[i+1]
 
-            # Two consecutive 2U (bullish expansion)
-            if bar1.bar_type == "2U" and bar2.bar_type == "2U":
+            # Bullish 2-2 Reversal: 2D -> 2U
+            if bar1.bar_type == "2D" and bar2.bar_type == "2U":
                 return STRATPattern(
-                    pattern_type="2-2 Combo",
+                    pattern_type="2-2 Reversal",
                     bars=[bar1, bar2],
                     direction="bullish",
                     confidence="medium",
-                    description=f"Bullish 2-2: Volatile expansion to ${bar2.high:.2f} (watch for exhaustion)"
+                    description=f"Bullish 2-2 Reversal: Direction change from 2D to 2U, breaking to ${bar2.high:.2f}"
                 )
 
-            # Two consecutive 2D (bearish expansion)
-            elif bar1.bar_type == "2D" and bar2.bar_type == "2D":
+            # Bearish 2-2 Reversal: 2U -> 2D
+            elif bar1.bar_type == "2U" and bar2.bar_type == "2D":
                 return STRATPattern(
-                    pattern_type="2-2 Combo",
+                    pattern_type="2-2 Reversal",
                     bars=[bar1, bar2],
                     direction="bearish",
                     confidence="medium",
-                    description=f"Bearish 2-2: Volatile expansion to ${bar2.low:.2f} (watch for exhaustion)"
+                    description=f"Bearish 2-2 Reversal: Direction change from 2U to 2D, breaking to ${bar2.low:.2f}"
+                )
+
+        return None
+
+    @staticmethod
+    def detect_2_2_continuation(bars: List[Bar]) -> Optional[STRATPattern]:
+        """
+        Detect 2-2 Continuation pattern (NOT an entry signal, for position management only)
+        Pattern: 2U -> 2U (bullish continuation) or 2D -> 2D (bearish continuation)
+        """
+        if len(bars) < 2:
+            return None
+
+        for i in range(len(bars) - 1):
+            bar1, bar2 = bars[i], bars[i+1]
+
+            # Two consecutive 2U (bullish continuation)
+            if bar1.bar_type == "2U" and bar2.bar_type == "2U":
+                return STRATPattern(
+                    pattern_type="2-2 Continuation",
+                    bars=[bar1, bar2],
+                    direction="bullish",
+                    confidence="low",
+                    description=f"Bullish 2-2 Continuation: Momentum to ${bar2.high:.2f} (not entry signal, watch for exhaustion)"
+                )
+
+            # Two consecutive 2D (bearish continuation)
+            elif bar1.bar_type == "2D" and bar2.bar_type == "2D":
+                return STRATPattern(
+                    pattern_type="2-2 Continuation",
+                    bars=[bar1, bar2],
+                    direction="bearish",
+                    confidence="low",
+                    description=f"Bearish 2-2 Continuation: Momentum to ${bar2.low:.2f} (not entry signal, watch for exhaustion)"
                 )
 
         return None
@@ -502,18 +729,24 @@ class STRATDetector:
         return None
 
     @staticmethod
-    def scan_for_patterns(bars: List[Dict]) -> List[STRATPattern]:
+    def scan_for_patterns(bars: List[Dict], timeframe: str = "1Day") -> List[STRATPattern]:
         """
         Scan bar data for all STRAT patterns
         Returns list of detected patterns ordered by confidence
+
+        Args:
+            bars: List of OHLCV bar dictionaries
+            timeframe: Alpaca timeframe string for forming bar detection
         """
         if len(bars) < 2:
             return []
 
-        classified_bars = STRATDetector.classify_bars(bars)
+        classified_bars = STRATDetector.classify_bars(bars, timeframe)
         patterns = []
 
-        # Detect patterns in order of priority
+        # Detect patterns in order of priority (high confidence first)
+
+        # High confidence - confirmed patterns
         pattern_2_1_2 = STRATDetector.detect_2_1_2_reversal(classified_bars)
         if pattern_2_1_2:
             patterns.append(pattern_2_1_2)
@@ -522,12 +755,30 @@ class STRATDetector:
         if pattern_3_1_2:
             patterns.append(pattern_3_1_2)
 
-        pattern_2_2 = STRATDetector.detect_2_2_combo(classified_bars)
-        if pattern_2_2:
-            patterns.append(pattern_2_2)
+        # Medium confidence - 2-2 Reversal is an entry signal
+        pattern_2_2_rev = STRATDetector.detect_2_2_reversal(classified_bars)
+        if pattern_2_2_rev:
+            patterns.append(pattern_2_2_rev)
 
+        # Low confidence - 2-2 Continuation is NOT an entry signal
+        pattern_2_2_cont = STRATDetector.detect_2_2_continuation(classified_bars)
+        if pattern_2_2_cont:
+            patterns.append(pattern_2_2_cont)
+
+        # Setups (awaiting confirmation) - only report if no confirmed pattern
+        # 2-1 Setup (potential 2-1-2 reversal)
+        setup_2_1 = STRATDetector.detect_2_1_setup(classified_bars)
+        if setup_2_1:
+            patterns.append(setup_2_1)
+
+        # 3-1 Setup (potential 3-1-2 continuation)
+        setup_3_1 = STRATDetector.detect_3_1_setup(classified_bars)
+        if setup_3_1:
+            patterns.append(setup_3_1)
+
+        # Generic inside bar setup (only if no specific setups detected)
         inside_bar = STRATDetector.detect_inside_bar_setup(classified_bars)
-        if inside_bar:
+        if inside_bar and not setup_2_1 and not setup_3_1:
             patterns.append(inside_bar)
 
         # Sort by confidence (high > medium > low)
@@ -568,6 +819,9 @@ def format_tfc_report(ticker: str, tfc: TFCScore, metrics: Optional[StockMetrics
     for detail in tfc.details:
         bias_indicator = "[BULL]" if detail.bias == "bullish" else "[BEAR]" if detail.bias == "bearish" else "[NEUT]"
         pattern_str = f" ({detail.pattern})" if detail.pattern else ""
-        report += f"  {bias_indicator} {detail.timeframe.upper()}: {detail.bias}{pattern_str} - Type {detail.bar_type}\n"
+        forming_str = " (forming)" if detail.is_forming else ""
+        # Type 1 bars are neutral/indecision - indicate this in output
+        type_note = " - indecision" if detail.bar_type == "1" else ""
+        report += f"  {bias_indicator} {detail.timeframe.upper()}: {detail.bias}{pattern_str} - Type {detail.bar_type}{forming_str}{type_note}\n"
 
     return report
