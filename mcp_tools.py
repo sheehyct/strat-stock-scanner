@@ -74,8 +74,8 @@ async def analyze_strat_patterns(
         traceback.print_exc()
         raise
 
-    # Detect patterns
-    patterns = STRATDetector.scan_for_patterns(bars)
+    # Detect patterns (pass timeframe for forming bar detection)
+    patterns = STRATDetector.scan_for_patterns(bars, timeframe)
 
     # Get current price and metrics
     current_price = bars[-1]['c']
@@ -98,11 +98,12 @@ async def analyze_strat_patterns(
         report += f"   Key Level: ${pattern.entry_level:.2f}\n\n"
 
     # Show recent bar sequence
-    classified_bars = STRATDetector.classify_bars(bars)[-5:]
+    classified_bars = STRATDetector.classify_bars(bars, timeframe)[-5:]
     report += "**Recent Bar Sequence:**\n"
     for bar in classified_bars:
         bar_date = bar.timestamp.split('T')[0]
-        report += f"  {bar_date}: Type {bar.bar_type} (H:${bar.high:.2f} L:${bar.low:.2f} C:${bar.close:.2f})\n"
+        forming_str = " (forming)" if bar.is_forming else ""
+        report += f"  {bar_date}: Type {bar.bar_type}{forming_str} (H:${bar.high:.2f} L:${bar.low:.2f} C:${bar.close:.2f})\n"
 
     return report
 
@@ -188,11 +189,18 @@ async def analyze_tfc(
     # Add pattern details for each timeframe
     report += "\n**Pattern Details:**\n"
 
-    tf_names = {"monthly": "Monthly", "weekly": "Weekly", "daily": "Daily", "60min": "60min", "15min": "15min"}
-    for tf_key, tf_name in tf_names.items():
+    # Map internal names to Alpaca timeframe strings for forming bar detection
+    tf_mapping = {
+        "monthly": ("Monthly", "1Month"),
+        "weekly": ("Weekly", "1Week"),
+        "daily": ("Daily", "1Day"),
+        "60min": ("60min", "1Hour"),
+        "15min": ("15min", "15Min")
+    }
+    for tf_key, (tf_name, alpaca_tf) in tf_mapping.items():
         bars = timeframe_data.get(tf_key, [])
         if bars:
-            patterns = STRATDetector.scan_for_patterns(bars)
+            patterns = STRATDetector.scan_for_patterns(bars, alpaca_tf)
             if patterns:
                 top_pattern = patterns[0]
                 direction = "[BULL]" if top_pattern.direction == "bullish" else "[BEAR]"

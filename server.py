@@ -84,7 +84,7 @@ async def list_tools():
         ),
         Tool(
             name="analyze_strat_patterns",
-            description="Analyze stock for STRAT patterns (2-1-2, 3-1-2, 2-2, Rev Strats)",
+            description="Analyze stock for STRAT patterns (2-1-2, 3-1-2, 2-2 Reversal/Continuation)",
             inputSchema={
                 "type": "object",
                 "properties": {
