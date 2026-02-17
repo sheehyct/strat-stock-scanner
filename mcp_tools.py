@@ -5,7 +5,9 @@ Includes ATR/Volume filtering and multi-timeframe TFC analysis
 """
 
 from typing import List, Optional
+from datetime import datetime, time
 import asyncio
+import pytz
 from alpaca_client import alpaca
 from strat_detector import (
     STRATDetector,
@@ -16,6 +18,25 @@ from strat_detector import (
 )
 
 
+def _get_session_type(timestamp_str: str) -> str:
+    """Determine if a quote timestamp falls in regular or extended hours."""
+    if not timestamp_str:
+        return "unknown"
+    try:
+        et = pytz.timezone("America/New_York")
+        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        dt_et = dt.astimezone(et)
+        market_open = time(9, 30)
+        market_close = time(16, 0)
+        if dt_et.time() < market_open:
+            return "pre-market"
+        elif dt_et.time() >= market_close:
+            return "post-market"
+        return "regular"
+    except Exception:
+        return "unknown"
+
+
 async def get_stock_quote(ticker: str) -> str:
     """
     Get real-time stock quote with current price and bid/ask spread.
@@ -23,16 +44,20 @@ async def get_stock_quote(ticker: str) -> str:
     Args:
         ticker: Stock symbol (e.g., 'AAPL', 'MSFT', 'SPY')
     """
-    quote = await alpaca.get_quote(ticker, feed="iex")
+    quote = await alpaca.get_quote(ticker)
 
     if not quote:
         return f"Error fetching quote for {ticker}"
+
+    # Determine if quote is from extended hours
+    session = _get_session_type(quote.get('t', ''))
 
     return f"""**{ticker.upper()} Quote**
 Bid: ${quote['bp']:.2f} x {quote['bs']}
 Ask: ${quote['ap']:.2f} x {quote['as']}
 Spread: ${quote['ap'] - quote['bp']:.2f}
-Time: {quote['t']}"""
+Time: {quote['t']}
+Feed: {alpaca.quote_feed.upper()} | Session: {session}"""
 
 
 async def analyze_strat_patterns(
@@ -59,8 +84,7 @@ async def analyze_strat_patterns(
         bars = await alpaca.get_bars_recent(
             ticker,
             days_back=days_back,
-            timeframe=timeframe,
-            feed="sip"
+            timeframe=timeframe
         )
 
         print(f"[API RESPONSE] Received {len(bars) if bars else 0} bars for {ticker}")
@@ -136,7 +160,7 @@ async def analyze_tfc(
         if include_monthly:
             print(f"Fetching monthly bars for {ticker}...")
             monthly_bars = await alpaca.get_bars_recent(
-                ticker, days_back=120, timeframe="1Month", feed="sip"
+                ticker, days_back=120, timeframe="1Month"
             )
             timeframe_data["monthly"] = monthly_bars if monthly_bars else []
 
@@ -144,28 +168,28 @@ async def analyze_tfc(
         if include_weekly:
             print(f"Fetching weekly bars for {ticker}...")
             weekly_bars = await alpaca.get_bars_recent(
-                ticker, days_back=60, timeframe="1Week", feed="sip"
+                ticker, days_back=60, timeframe="1Week"
             )
             timeframe_data["weekly"] = weekly_bars if weekly_bars else []
 
         # Daily - 20 days for pattern detection + ATR
         print(f"Fetching daily bars for {ticker}...")
         daily_bars = await alpaca.get_bars_recent(
-            ticker, days_back=20, timeframe="1Day", feed="sip"
+            ticker, days_back=20, timeframe="1Day"
         )
         timeframe_data["daily"] = daily_bars if daily_bars else []
 
         # 60min - 10 days worth
         print(f"Fetching 60min bars for {ticker}...")
         h60_bars = await alpaca.get_bars_recent(
-            ticker, days_back=10, timeframe="1Hour", feed="sip"
+            ticker, days_back=10, timeframe="1Hour"
         )
         timeframe_data["60min"] = h60_bars if h60_bars else []
 
         # 15min - 5 days worth
         print(f"Fetching 15min bars for {ticker}...")
         m15_bars = await alpaca.get_bars_recent(
-            ticker, days_back=5, timeframe="15Min", feed="sip"
+            ticker, days_back=5, timeframe="15Min"
         )
         timeframe_data["15min"] = m15_bars if m15_bars else []
 
@@ -209,6 +233,19 @@ async def analyze_tfc(
                 report += f"  [NONE] {tf_name}: No pattern\n"
         else:
             report += f"  [----] {tf_name}: No data\n"
+
+    # Contextual TFC scoring by detection timeframe
+    report += "\n**Contextual TFC (timeframe-appropriate scoring):**\n"
+    context_timeframes = {
+        "1Hour": "Hourly",
+        "1Day": "Daily",
+        "1Week": "Weekly"
+    }
+    for ctx_tf, ctx_name in context_timeframes.items():
+        ctx = STRATDetector.get_contextual_tfc(tfc, ctx_tf)
+        pass_mark = "PASS" if ctx["passes"] else "FAIL"
+        report += f"  {ctx_name} patterns: {ctx['effective_score']}/{ctx['max_possible']} ({ctx['effective_quality']}) [{pass_mark}]\n"
+        report += f"    Checks: {', '.join(ctx['relevant_timeframes'])} (need {ctx['min_required']})\n"
 
     return report
 
@@ -466,19 +503,19 @@ async def scan_for_tfc_alignment(
             # Monthly
             if include_monthly:
                 monthly_bars = await alpaca.get_bars_recent(
-                    ticker, days_back=120, timeframe="1Month", feed="sip"
+                    ticker, days_back=120, timeframe="1Month"
                 )
                 timeframe_data["monthly"] = monthly_bars if monthly_bars else []
 
             # Weekly
             weekly_bars = await alpaca.get_bars_recent(
-                ticker, days_back=60, timeframe="1Week", feed="sip"
+                ticker, days_back=60, timeframe="1Week"
             )
             timeframe_data["weekly"] = weekly_bars if weekly_bars else []
 
             # Daily (also used for metrics)
             daily_bars = await alpaca.get_bars_recent(
-                ticker, days_back=20, timeframe="1Day", feed="sip"
+                ticker, days_back=20, timeframe="1Day"
             )
             timeframe_data["daily"] = daily_bars if daily_bars else []
 
@@ -493,13 +530,13 @@ async def scan_for_tfc_alignment(
 
             # 60min
             h60_bars = await alpaca.get_bars_recent(
-                ticker, days_back=10, timeframe="1Hour", feed="sip"
+                ticker, days_back=10, timeframe="1Hour"
             )
             timeframe_data["60min"] = h60_bars if h60_bars else []
 
             # 15min
             m15_bars = await alpaca.get_bars_recent(
-                ticker, days_back=5, timeframe="15Min", feed="sip"
+                ticker, days_back=5, timeframe="15Min"
             )
             timeframe_data["15min"] = m15_bars if m15_bars else []
 
@@ -562,7 +599,7 @@ async def get_multiple_quotes(tickers: List[str]) -> str:
         return "Error: Maximum 50 tickers per request"
 
     # Use rate-limited client (handles throttling automatically)
-    quotes = await alpaca.get_multiple_quotes(tickers, feed="iex")
+    quotes = await alpaca.get_multiple_quotes(tickers)
 
     results = []
     for ticker in tickers:

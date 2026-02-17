@@ -25,18 +25,21 @@ class AlpacaClient:
             "APCA-API-KEY-ID": settings.ALPACA_API_KEY,
             "APCA-API-SECRET-KEY": settings.ALPACA_API_SECRET
         }
+        self.default_feed = settings.ALPACA_DATA_FEED
+        self.quote_feed = settings.ALPACA_QUOTE_FEED or self.default_feed
 
-    async def get_quote(self, ticker: str, feed: str = "iex") -> Optional[Dict]:
+    async def get_quote(self, ticker: str, feed: Optional[str] = None) -> Optional[Dict]:
         """
         Get real-time quote for a single ticker
 
         Args:
             ticker: Stock symbol (e.g., 'AAPL')
-            feed: Data feed - 'iex' (free) or 'sip' (paid subscription)
+            feed: Data feed override; defaults to configured quote_feed
 
         Returns:
             Quote dictionary with bid/ask data or None on error
         """
+        feed = feed or self.quote_feed
         async with httpx.AsyncClient() as client:
             response = await alpaca_limiter.make_request(
                 client,
@@ -65,7 +68,7 @@ class AlpacaClient:
         start: str,
         end: str,
         timeframe: str = "1Day",
-        feed: str = "sip",
+        feed: Optional[str] = None,
         adjustment: str = "split"
     ) -> List[Dict]:
         """
@@ -76,12 +79,13 @@ class AlpacaClient:
             start: Start datetime (ISO format)
             end: End datetime (ISO format)
             timeframe: Bar timeframe ('1Day', '1Hour', etc.)
-            feed: Data feed - 'iex' (free) or 'sip' (paid)
+            feed: Data feed override; defaults to configured default_feed
             adjustment: Price adjustment type ('split', 'dividend', 'all')
 
         Returns:
             List of bar dictionaries or empty list on error
         """
+        feed = feed or self.default_feed
         url = f"{self.base_url}/stocks/{ticker.upper()}/bars"
         params = {
             "start": start,
@@ -123,7 +127,7 @@ class AlpacaClient:
         ticker: str,
         days_back: int = 10,
         timeframe: str = "1Day",
-        feed: str = "sip"
+        feed: Optional[str] = None
     ) -> List[Dict]:
         """
         Get recent historical bars (convenience method)
@@ -132,13 +136,18 @@ class AlpacaClient:
             ticker: Stock symbol
             days_back: Number of days of history to fetch
             timeframe: Bar timeframe
-            feed: Data feed
+            feed: Data feed override; defaults to configured default_feed
 
         Returns:
             List of bar dictionaries
         """
+        feed = feed or self.default_feed
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
+        # For intraday timeframes, extend start to capture pre-market (4:00 AM ET)
+        if timeframe in ("1Hour", "15Min", "30Min", "5Min", "1Min"):
+            start_date = end_date - timedelta(days=days_back, hours=5)
+        else:
+            start_date = end_date - timedelta(days=days_back)
 
         # Format dates as RFC3339 with timezone (Alpaca requirement)
         # Use strftime to avoid microseconds that Alpaca rejects
@@ -156,21 +165,43 @@ class AlpacaClient:
             feed
         )
 
+    async def get_snapshot(self, ticker: str, feed: Optional[str] = None) -> Optional[Dict]:
+        """Get snapshot (latest trade, quote, and bar) for a ticker.
+        More reliable during extended hours than separate quote calls."""
+        feed = feed or self.quote_feed
+        async with httpx.AsyncClient() as client:
+            response = await alpaca_limiter.make_request(
+                client,
+                "GET",
+                f"{self.base_url}/stocks/{ticker.upper()}/snapshot",
+                params={"feed": feed},
+                headers=self.headers,
+                timeout=10.0
+            )
+            if response and response.status_code == 200:
+                return response.json()
+            if response:
+                print(f"[ERROR] Alpaca snapshot API error: {response.status_code} - {response.text[:200]}")
+            else:
+                print(f"[ERROR] Alpaca snapshot API request failed - no response")
+            return None
+
     async def get_multiple_quotes(
         self,
         tickers: List[str],
-        feed: str = "iex"
+        feed: Optional[str] = None
     ) -> Dict[str, Optional[Dict]]:
         """
         Get quotes for multiple tickers with rate limiting
 
         Args:
             tickers: List of stock symbols
-            feed: Data feed
+            feed: Data feed override; defaults to configured quote_feed
 
         Returns:
             Dictionary mapping ticker -> quote data (or None if error)
         """
+        feed = feed or self.quote_feed
         results = {}
 
         for ticker in tickers:

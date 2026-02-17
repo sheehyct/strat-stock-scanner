@@ -22,9 +22,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # Data Feed Configuration
+    ALPACA_DATA_FEED: str = "sip"  # "sip" for Algo Trader Plus, "iex" for free tier
+    ALPACA_QUOTE_FEED: str = ""    # Override for quotes; empty = use ALPACA_DATA_FEED
+
     # Rate Limiting Configuration
-    ALPACA_REQUESTS_PER_MINUTE: int = 180
-    MAX_CONCURRENT_REQUESTS: int = 3
+    ALPACA_REQUESTS_PER_MINUTE: int = 9000  # Algo Trader Plus allows 10,000
+    MAX_CONCURRENT_REQUESTS: int = 10
 
     # Server Configuration
     PORT: int = 8080

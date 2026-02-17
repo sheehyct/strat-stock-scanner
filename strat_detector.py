@@ -114,9 +114,13 @@ class TFCScore:
     aligned_timeframes: List[str]
     dominant_bias: str
     details: List[TimeframeBias]
+    bullish_count: int = 0  # Number of bullish timeframes
+    bearish_count: int = 0  # Number of bearish timeframes
+    neutral_count: int = 0  # Number of neutral timeframes (Type 1 / no data)
 
     def __str__(self):
-        return f"TFC {self.score}/5 ({self.quality}) - {self.dominant_bias.upper()} | Aligned: {', '.join(self.aligned_timeframes)}"
+        bias_breakdown = f"{self.bullish_count} Bull / {self.bearish_count} Bear / {self.neutral_count} Neutral"
+        return f"TFC {self.score}/5 ({self.quality}) - {self.dominant_bias.upper()} | {bias_breakdown}"
 
 
 class STRATDetector:
@@ -374,9 +378,47 @@ class STRATDetector:
         return ("neutral", None, last_bar_type, is_forming)
 
     @staticmethod
+    def classify_bar_direction(bar: Bar) -> str:
+        """
+        Classify bar direction for TFC scoring using bar type only.
+
+        Per STRAT methodology, TFC measures the directional state of each
+        timeframe independently using only bar classification:
+        - Type 1 (inside): Always "neutral" - indecision, excluded from TFC
+        - Type 2U: "bullish" - directional up
+        - Type 2D: "bearish" - directional down
+        - Type 3 (outside): Direction by candle color (Close > Open = bullish)
+
+        This separates TFC scoring from pattern detection for cleaner analysis.
+
+        Args:
+            bar: Classified Bar object
+
+        Returns:
+            "bullish", "bearish", or "neutral"
+        """
+        if bar.bar_type == "2U":
+            return "bullish"
+        elif bar.bar_type == "2D":
+            return "bearish"
+        elif bar.bar_type == "3":
+            # Type 3: direction by candle color
+            if bar.close > bar.open:
+                return "bullish"
+            elif bar.close < bar.open:
+                return "bearish"
+            return "neutral"  # Doji-like Type 3
+        # Type 1 and anything else
+        return "neutral"
+
+    @staticmethod
     def calculate_tfc_score(timeframe_data: Dict[str, List[Dict]]) -> TFCScore:
         """
-        Calculate Timeframe Continuity score
+        Calculate Timeframe Continuity score using bar-type-only bias.
+
+        Uses classify_bar_direction() for pure directional state assessment,
+        separate from pattern detection. This matches STRAT methodology where
+        TFC measures the raw directional state of each timeframe.
 
         Args:
             timeframe_data: Dict mapping timeframe name to bar data
@@ -388,7 +430,6 @@ class STRATDetector:
         details = []
         biases = {"bullish": 0, "bearish": 0, "neutral": 0}
 
-        # Map internal names to Alpaca timeframe strings
         timeframe_mapping = {
             "monthly": "1Month",
             "weekly": "1Week",
@@ -403,7 +444,7 @@ class STRATDetector:
             bars = timeframe_data.get(tf, [])
             alpaca_tf = timeframe_mapping.get(tf, "1Day")
 
-            if not bars:
+            if not bars or len(bars) < 2:
                 details.append(TimeframeBias(
                     timeframe=tf,
                     bias="neutral",
@@ -415,31 +456,35 @@ class STRATDetector:
                 biases["neutral"] += 1
                 continue
 
-            bias, pattern, bar_type, is_forming = STRATDetector.get_timeframe_bias(bars, alpaca_tf)
+            # Classify bars and get last bar's direction
+            classified = STRATDetector.classify_bars(bars, alpaca_tf)
+            last_bar = classified[-1]
+            direction = STRATDetector.classify_bar_direction(last_bar)
 
-            # Get confidence from pattern if available
+            # Get pattern info separately (for display, not for TFC scoring)
             patterns = STRATDetector.scan_for_patterns(bars, alpaca_tf)
+            pattern_name = None
             confidence = "none"
             if patterns:
-                matching = [p for p in patterns if p.direction == bias]
+                # Find pattern matching the bar's direction
+                matching = [p for p in patterns if p.direction == direction]
                 if matching:
+                    pattern_name = matching[0].pattern_type
                     confidence = matching[0].confidence
+                elif patterns:
+                    pattern_name = patterns[0].pattern_type
+                    confidence = patterns[0].confidence
 
             details.append(TimeframeBias(
                 timeframe=tf,
-                bias=bias,
-                pattern=pattern,
-                bar_type=bar_type,
+                bias=direction,
+                pattern=pattern_name,
+                bar_type=last_bar.bar_type,
                 confidence=confidence,
-                is_forming=is_forming
+                is_forming=last_bar.is_forming
             ))
 
-            # Type 1 (inside) bars should NOT count toward TFC alignment
-            # They represent indecision, not directional bias
-            if bar_type == "1":
-                biases["neutral"] += 1
-            else:
-                biases[bias] += 1
+            biases[direction] += 1
 
         # Determine dominant bias
         if biases["bullish"] > biases["bearish"]:
@@ -452,10 +497,8 @@ class STRATDetector:
             dominant = "neutral"
             aligned = []
 
-        # Calculate score (0-5)
         score = max(biases["bullish"], biases["bearish"])
 
-        # Determine quality grade
         if score >= 5:
             quality = "A+"
         elif score >= 4:
@@ -472,8 +515,85 @@ class STRATDetector:
             quality=quality,
             aligned_timeframes=aligned,
             dominant_bias=dominant,
-            details=details
+            details=details,
+            bullish_count=biases["bullish"],
+            bearish_count=biases["bearish"],
+            neutral_count=biases["neutral"]
         )
+
+    @staticmethod
+    def get_contextual_tfc(tfc: 'TFCScore', detection_timeframe: str) -> Dict[str, any]:
+        """
+        Get timeframe-appropriate TFC assessment for a given detection timeframe.
+
+        Key insight from workspace research (EQUITY-44, 55, 63, 89):
+        Checking lower timeframes for higher timeframe patterns causes false filtering.
+        A daily pattern doesn't need 15-minute alignment to be valid.
+
+        Args:
+            tfc: Full TFC score from calculate_tfc_score()
+            detection_timeframe: Where the pattern was detected
+                "15Min", "1Hour", "1Day", "1Week", "1Month"
+
+        Returns:
+            Dict with contextual scoring:
+            {
+                'effective_score': int,
+                'max_possible': int,
+                'effective_quality': str,
+                'relevant_timeframes': list,
+                'aligned_in_context': list,
+                'passes': bool
+            }
+        """
+        # Timeframe-appropriate requirements (ported from workspace)
+        requirements = {
+            "15Min": {"timeframes": ["monthly", "weekly", "daily", "60min", "15min"], "min": 3},
+            "1Hour": {"timeframes": ["monthly", "weekly", "daily", "60min"], "min": 3},
+            "1Day":  {"timeframes": ["monthly", "weekly", "daily"], "min": 2},
+            "1Week": {"timeframes": ["monthly", "weekly"], "min": 1},
+            "1Month": {"timeframes": ["monthly"], "min": 1},
+        }
+
+        req = requirements.get(detection_timeframe, requirements["1Day"])
+        relevant_tfs = req["timeframes"]
+        min_aligned = req["min"]
+
+        # Filter TFC details to relevant timeframes
+        relevant_details = [d for d in tfc.details if d.timeframe in relevant_tfs]
+
+        # Count directional alignment in dominant direction
+        if tfc.dominant_bias in ("bullish", "bearish"):
+            aligned = [d for d in relevant_details if d.bias == tfc.dominant_bias]
+        else:
+            aligned = []
+
+        effective_score = len(aligned)
+        max_possible = len(relevant_tfs)
+        passes = effective_score >= min_aligned
+
+        # Quality grade for contextual score
+        ratio = effective_score / max_possible if max_possible > 0 else 0
+        if ratio >= 1.0:
+            quality = "A+"
+        elif ratio >= 0.75:
+            quality = "A"
+        elif ratio >= 0.5:
+            quality = "B"
+        elif ratio >= 0.25:
+            quality = "C"
+        else:
+            quality = "D"
+
+        return {
+            "effective_score": effective_score,
+            "max_possible": max_possible,
+            "effective_quality": quality,
+            "relevant_timeframes": relevant_tfs,
+            "aligned_in_context": [d.timeframe for d in aligned],
+            "passes": passes,
+            "min_required": min_aligned
+        }
 
     @staticmethod
     def detect_2_1_2_reversal(bars: List[Bar]) -> Optional[STRATPattern]:
@@ -816,6 +936,7 @@ def format_tfc_report(ticker: str, tfc: TFCScore, metrics: Optional[StockMetrics
         report += f"Metrics: {metrics}\n"
 
     report += "\n**Timeframe Breakdown:**\n"
+    report += f"Directional Split: {tfc.bullish_count} Bullish / {tfc.bearish_count} Bearish / {tfc.neutral_count} Neutral\n\n"
     for detail in tfc.details:
         bias_indicator = "[BULL]" if detail.bias == "bullish" else "[BEAR]" if detail.bias == "bearish" else "[NEUT]"
         pattern_str = f" ({detail.pattern})" if detail.pattern else ""

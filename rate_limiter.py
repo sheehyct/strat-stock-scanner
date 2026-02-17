@@ -121,5 +121,10 @@ class AlpacaRateLimiter:
             return None
 
 
-# Global rate limiter instance
-alpaca_limiter = AlpacaRateLimiter(requests_per_minute=180, max_concurrent=3)
+from config import settings
+
+# Global rate limiter instance - uses configured values
+alpaca_limiter = AlpacaRateLimiter(
+    requests_per_minute=settings.ALPACA_REQUESTS_PER_MINUTE,
+    max_concurrent=settings.MAX_CONCURRENT_REQUESTS
+)
