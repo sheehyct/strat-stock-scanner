@@ -6,15 +6,12 @@ Includes ATR/Volume filtering and multi-timeframe TFC analysis
 
 from typing import List, Optional
 from datetime import datetime, time
-import asyncio
 import pytz
 from alpaca_client import alpaca
 from strat_detector import (
     STRATDetector,
     format_pattern_report,
     format_tfc_report,
-    StockMetrics,
-    TFCScore
 )
 
 
@@ -155,43 +152,33 @@ async def analyze_tfc(
     timeframe_data = {}
 
     try:
-        # Fetch each timeframe
-        # Monthly - need ~120 days to get enough monthly bars
+        # Fetch each timeframe (get_bars_recent returns [] on error)
         if include_monthly:
             print(f"Fetching monthly bars for {ticker}...")
-            monthly_bars = await alpaca.get_bars_recent(
+            timeframe_data["monthly"] = await alpaca.get_bars_recent(
                 ticker, days_back=120, timeframe="1Month"
             )
-            timeframe_data["monthly"] = monthly_bars if monthly_bars else []
 
-        # Weekly - need ~60 days to get enough weekly bars
         if include_weekly:
             print(f"Fetching weekly bars for {ticker}...")
-            weekly_bars = await alpaca.get_bars_recent(
+            timeframe_data["weekly"] = await alpaca.get_bars_recent(
                 ticker, days_back=60, timeframe="1Week"
             )
-            timeframe_data["weekly"] = weekly_bars if weekly_bars else []
 
-        # Daily - 20 days for pattern detection + ATR
         print(f"Fetching daily bars for {ticker}...")
-        daily_bars = await alpaca.get_bars_recent(
+        timeframe_data["daily"] = await alpaca.get_bars_recent(
             ticker, days_back=20, timeframe="1Day"
         )
-        timeframe_data["daily"] = daily_bars if daily_bars else []
 
-        # 60min - 10 days worth
         print(f"Fetching 60min bars for {ticker}...")
-        h60_bars = await alpaca.get_bars_recent(
+        timeframe_data["60min"] = await alpaca.get_bars_recent(
             ticker, days_back=10, timeframe="1Hour"
         )
-        timeframe_data["60min"] = h60_bars if h60_bars else []
 
-        # 15min - 5 days worth
         print(f"Fetching 15min bars for {ticker}...")
-        m15_bars = await alpaca.get_bars_recent(
+        timeframe_data["15min"] = await alpaca.get_bars_recent(
             ticker, days_back=5, timeframe="15Min"
         )
-        timeframe_data["15min"] = m15_bars if m15_bars else []
 
     except Exception as e:
         print(f"[ERROR] analyze_tfc failed: {type(e).__name__}: {str(e)}")
@@ -497,27 +484,22 @@ async def scan_for_tfc_alignment(
 
     for ticker in tickers:
         try:
-            # Fetch all timeframes
+            # Fetch all timeframes (get_bars_recent returns [] on error)
             timeframe_data = {}
 
-            # Monthly
             if include_monthly:
-                monthly_bars = await alpaca.get_bars_recent(
+                timeframe_data["monthly"] = await alpaca.get_bars_recent(
                     ticker, days_back=120, timeframe="1Month"
                 )
-                timeframe_data["monthly"] = monthly_bars if monthly_bars else []
 
-            # Weekly
-            weekly_bars = await alpaca.get_bars_recent(
+            timeframe_data["weekly"] = await alpaca.get_bars_recent(
                 ticker, days_back=60, timeframe="1Week"
             )
-            timeframe_data["weekly"] = weekly_bars if weekly_bars else []
 
-            # Daily (also used for metrics)
             daily_bars = await alpaca.get_bars_recent(
                 ticker, days_back=20, timeframe="1Day"
             )
-            timeframe_data["daily"] = daily_bars if daily_bars else []
+            timeframe_data["daily"] = daily_bars
 
             if not daily_bars:
                 continue
@@ -528,17 +510,13 @@ async def scan_for_tfc_alignment(
                 filtered_count += 1
                 continue
 
-            # 60min
-            h60_bars = await alpaca.get_bars_recent(
+            timeframe_data["60min"] = await alpaca.get_bars_recent(
                 ticker, days_back=10, timeframe="1Hour"
             )
-            timeframe_data["60min"] = h60_bars if h60_bars else []
 
-            # 15min
-            m15_bars = await alpaca.get_bars_recent(
+            timeframe_data["15min"] = await alpaca.get_bars_recent(
                 ticker, days_back=5, timeframe="15Min"
             )
-            timeframe_data["15min"] = m15_bars if m15_bars else []
 
             # Calculate TFC
             tfc = STRATDetector.calculate_tfc_score(timeframe_data)
@@ -576,14 +554,7 @@ async def scan_for_tfc_alignment(
         bias_marker = "[BULL]" if tfc.dominant_bias == "bullish" else "[BEAR]"
         output += f"{i}. {bias_marker} **{ticker}** - TFC {tfc.score}/5 ({tfc.quality})\n"
         output += f"   Aligned: {', '.join(tfc.aligned_timeframes)}\n"
-        output += f"   Metrics: {metrics}\n"
-
-        # Show top pattern from daily
-        if timeframe_data.get("daily"):
-            patterns = STRATDetector.scan_for_patterns(result.get('daily_bars', []))
-            if patterns:
-                output += f"   Pattern: {patterns[0].pattern_type} ({patterns[0].confidence})\n"
-        output += "\n"
+        output += f"   Metrics: {metrics}\n\n"
 
     return output
 

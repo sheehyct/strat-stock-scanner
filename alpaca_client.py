@@ -15,7 +15,7 @@ class AlpacaClient:
     Wrapper for Alpaca API with integrated rate limiting
 
     All API calls automatically use the global rate limiter to prevent
-    exceeding Alpaca's 200 requests/minute limit
+    exceeding the configured requests/minute limit
     """
 
     def __init__(self):

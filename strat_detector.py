@@ -5,7 +5,7 @@ Identifies completed STRAT patterns from historical bar data
 Includes ATR/Volume metrics and TFC scoring
 """
 
-from typing import List, Dict, Optional, Literal, Tuple
+from typing import List, Dict, Optional, Literal
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 import pytz
@@ -334,50 +334,6 @@ class STRATDetector:
         )
 
     @staticmethod
-    def get_timeframe_bias(bars: List[Dict], timeframe: str = "1Day") -> Tuple[str, Optional[str], str, bool]:
-        """
-        Determine bias for a timeframe based on recent bar action
-
-        Returns:
-            Tuple of (bias, pattern_type, last_bar_type, is_forming)
-        """
-        if not bars or len(bars) < 2:
-            return ("neutral", None, "?", False)
-
-        classified = STRATDetector.classify_bars(bars, timeframe)
-        patterns = STRATDetector.scan_for_patterns(bars, timeframe)
-
-        last_bar = classified[-1]
-        last_bar_type = last_bar.bar_type
-        is_forming = last_bar.is_forming
-
-        # Determine bias from patterns first
-        if patterns:
-            # Get highest confidence bullish/bearish pattern
-            bullish_patterns = [p for p in patterns if p.direction == "bullish"]
-            bearish_patterns = [p for p in patterns if p.direction == "bearish"]
-
-            if bullish_patterns and (not bearish_patterns or
-                bullish_patterns[0].confidence >= bearish_patterns[0].confidence):
-                return ("bullish", bullish_patterns[0].pattern_type, last_bar_type, is_forming)
-            elif bearish_patterns:
-                return ("bearish", bearish_patterns[0].pattern_type, last_bar_type, is_forming)
-
-        # Fall back to last bar type
-        if last_bar_type == "2U":
-            return ("bullish", None, last_bar_type, is_forming)
-        elif last_bar_type == "2D":
-            return ("bearish", None, last_bar_type, is_forming)
-        elif last_bar_type == "3":
-            # Check close vs open for directional 3
-            if last_bar.close > last_bar.open:
-                return ("bullish", None, last_bar_type, is_forming)
-            elif last_bar.close < last_bar.open:
-                return ("bearish", None, last_bar_type, is_forming)
-
-        return ("neutral", None, last_bar_type, is_forming)
-
-    @staticmethod
     def classify_bar_direction(bar: Bar) -> str:
         """
         Classify bar direction for TFC scoring using bar type only.
@@ -468,12 +424,9 @@ class STRATDetector:
             if patterns:
                 # Find pattern matching the bar's direction
                 matching = [p for p in patterns if p.direction == direction]
-                if matching:
-                    pattern_name = matching[0].pattern_type
-                    confidence = matching[0].confidence
-                elif patterns:
-                    pattern_name = patterns[0].pattern_type
-                    confidence = patterns[0].confidence
+                top = matching[0] if matching else patterns[0]
+                pattern_name = top.pattern_type
+                confidence = top.confidence
 
             details.append(TimeframeBias(
                 timeframe=tf,
@@ -831,16 +784,16 @@ class STRATDetector:
             return None
 
         last_bar = bars[-1]
-        prev_bar = bars[-2] if len(bars) >= 2 else None
+        prev_bar = bars[-2]
 
         # Current bar is inside bar
         if last_bar.bar_type == "1":
             # Determine likely direction based on prior trend
-            prior_trend = "bullish" if prev_bar and prev_bar.close > prev_bar.open else "bearish"
+            prior_trend = "bullish" if prev_bar.close > prev_bar.open else "bearish"
 
             return STRATPattern(
                 pattern_type="Inside Bar Setup",
-                bars=[prev_bar, last_bar] if prev_bar else [last_bar],
+                bars=[prev_bar, last_bar],
                 direction=prior_trend,
                 confidence="low",
                 description=f"Inside bar at ${last_bar.close:.2f} - Watch for breakout (High: ${last_bar.high:.2f}, Low: ${last_bar.low:.2f})"

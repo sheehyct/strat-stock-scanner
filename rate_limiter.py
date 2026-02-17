@@ -1,12 +1,13 @@
 """
 Rate limiter for Alpaca API calls
-Handles 200 requests/minute limit with exponential backoff and concurrent request limiting
+Handles configurable requests/minute limit with exponential backoff and concurrent request limiting
 """
 
 import asyncio
 import httpx
 from typing import Optional
 from datetime import datetime, timedelta
+from config import settings
 
 
 class AlpacaRateLimiter:
@@ -14,8 +15,8 @@ class AlpacaRateLimiter:
     Rate limiter for Alpaca API calls
 
     Manages:
-    - Requests per minute limit (default 180 to stay safely under 200)
-    - Maximum concurrent requests (default 3)
+    - Requests per minute limit (configured via settings)
+    - Maximum concurrent requests (configured via settings)
     - Exponential backoff on 429 rate limit errors
     - Automatic retry logic with configurable max attempts
     """
@@ -120,8 +121,6 @@ class AlpacaRateLimiter:
             print(f"Failed after {max_retries} attempts: {url}")
             return None
 
-
-from config import settings
 
 # Global rate limiter instance - uses configured values
 alpaca_limiter = AlpacaRateLimiter(
