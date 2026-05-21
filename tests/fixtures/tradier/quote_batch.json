@@ -1,0 +1,60 @@
+{
+  "quotes": {
+    "quote": [
+      {
+        "symbol": "SPY",
+        "description": "SPDR S&P 500 ETF Trust",
+        "exch": "P",
+        "type": "etf",
+        "last": 529.45,
+        "change": 1.20,
+        "volume": 31230110,
+        "open": 528.10,
+        "high": 530.05,
+        "low": 527.40,
+        "close": 528.25,
+        "bid": 529.43,
+        "ask": 529.46,
+        "trade_date": 1716296399000,
+        "bidsize": 5,
+        "asksize": 3
+      },
+      {
+        "symbol": "QQQ",
+        "description": "Invesco QQQ Trust",
+        "exch": "P",
+        "type": "etf",
+        "last": 458.10,
+        "change": 0.90,
+        "volume": 21010220,
+        "open": 457.50,
+        "high": 458.80,
+        "low": 456.90,
+        "close": 457.20,
+        "bid": 458.08,
+        "ask": 458.12,
+        "trade_date": 1716296399000,
+        "bidsize": 4,
+        "asksize": 2
+      },
+      {
+        "symbol": "IWM",
+        "description": "iShares Russell 2000 ETF",
+        "exch": "P",
+        "type": "etf",
+        "last": 204.10,
+        "change": 0.30,
+        "volume": 18100330,
+        "open": 203.80,
+        "high": 204.50,
+        "low": 203.20,
+        "close": 203.80,
+        "bid": 204.08,
+        "ask": 204.12,
+        "trade_date": 1716296399000,
+        "bidsize": 6,
+        "asksize": 4
+      }
+    ]
+  }
+}
