@@ -44,9 +44,14 @@ venv.bak/
 .env.*.local
 
 # Claude Code workspace settings
-.claude/
-!.claude/mcp.json
-!.claude/skills/
+# .claude/ is tracked (commands, settings, hooks wiring).
+# Only local overrides, transient state, and per-agent worktrees are ignored.
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/development_state.json
+.claude/statusline.sh.backup
+.claude/mcp.json.backup
 
 # Logs
 *.log

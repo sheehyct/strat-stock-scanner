@@ -1,260 +1,221 @@
-# STRAT Scanner Development Project
+# STRAT Stock Scanner - Development Rules
 
-## CRITICAL: Professional Communication Standards
+> Scanner-specific rules. Universal safety rules inherited from
+> `C:\Strat_Trading_Bot\CLAUDE.md` (the spine context file).
 
-**ALL written output must meet professional quantitative developer standards:**
+## What This Project Is
 
-### Git Commit Messages
-- NO emojis or special characters (plain ASCII text only)
-- NO Anthropic/Claude Code signatures or AI attribution
-- NO excessive capitalization (use sparingly for CRITICAL items only)
-- NO references to bugs, issues, or critical problems (public repository)
-- NO internal debugging context or failed attempts
-- Professional tone as if working with a quantitative development team
-- Follow conventional commits format (feat:, fix:, docs:, test:, refactor:)
-- Explain WHAT changed and WHY (focus on accomplishments, not problems)
-- Public commits show completed work, not internal struggles
+A small MCP server (~3000 LOC) deployed to Railway, used by the user's mobile
+Claude app for **conversational** TFC scanning during market discussions.
 
-**Public Repository Rule:**
-The repository is public. Commit messages must maintain professional standards:
-- Focus on what was implemented and why it's valuable
-- Omit references to bugs, critical issues, or debugging
-- Do not expose internal development struggles or failed attempts
-- Present completed work as polished contributions
+**This is NOT a trading system.** It does not place orders, manage positions,
+or execute strategies. It exposes STRAT pattern detection and Timeframe
+Continuity (TFC) scoring as MCP tools so the user can ask "what's SPY's TFC
+look like right now?" from a phone and get a real answer.
 
-**Examples:**
+Sister project: `C:\Strat_Trading_Bot\vectorbt-workspace` (ATLAS) - the
+algorithmic backtesting and live-trading platform. ATLAS is the source of
+methodology truth; the scanner is a read-only consumer.
 
-CORRECT:
-```
-feat: implement BaseStrategy abstract class for multi-strategy system
+## Session Start
 
-Add abstract base class that all ATLAS strategies will inherit from.
-Includes generate_signals(), calculate_position_size(), and backtest()
-methods. Enables portfolio-level orchestration and standardized metrics.
-```
+1. Read `docs/HANDOFF.md` (current state and recent sessions)
+2. Read `.session_startup_prompt.md` (current mission)
+3. Verify tests pass: `uv run pytest tests/ -q`
+4. Verify MCP transport health: see `docs/SCANNER_STATUS_BRIEF.md`
 
-INCORRECT:
-```
-feat: add BaseStrategy class
+## MANDATORY Skills (ZERO TOLERANCE)
 
-Created the base class. This will be used by strategies.
-```
+**MUST invoke this skill before writing related code. No exceptions.**
 
-INCORRECT (emojis, casual tone):
-```
-feat: add BaseStrategy class
+| Skill | Invoke When |
+|-------|-------------|
+| `strat-methodology` | ANY STRAT pattern detection, bar classification, timeframe analysis, TFC scoring change |
 
-Created base strategy class for all the strategies to inherit from.
-This is pretty cool and should work great!
-```
+The other ATLAS-specific skills (thetadata-api, backtesting-validation,
+dashboard-design) do NOT apply here. The scanner does not hit ThetaData,
+does not backtest, and has no dashboard UI.
 
-### Documentation
-- Professional technical writing (third person, declarative)
-- NO emojis, checkmarks, special bullets, unicode symbols
-- Plain ASCII text only (Windows compatibility requirement)
-- Cite sources and provide rationale for design decisions
-- Use code examples and specific metrics
+## Communication Standards
 
-### Code Comments
-- Explain WHY, not WHAT (code shows what)
-- Reference papers, articles, or domain knowledge where applicable
-- Professional tone (avoid casual language)
+- NO emojis or unicode characters (Windows terminal compatibility)
+- NO AI attribution in commits or docs
+- Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`
+- Professional tone, plain ASCII only
+- All timestamps: timezone-aware (`tz='America/New_York'` for market data)
 
-### Windows Unicode Compatibility
-- This rule has ZERO EXCEPTIONS
-- Emojis cause Windows unicode errors in git operations
-- Special characters break CI/CD pipelines
-- Use plain text: "PASSED" not checkmark, "FAILED" not X emoji
+## Brutal Honesty Policy
 
-## MANDATORY: Brutal Honesty Policy
+- If you don't know, say "I don't know"
+- If guessing, say "I'm guessing"
+- If wrong approach, say "This is wrong because..."
+- If simpler way exists, suggest it
+- If task adds complexity without value, say so
 
-**ALWAYS respond with brutal honesty:**
-- If you don't know something, say "I don't know"
-- If you're guessing, say "I'm guessing"
-- If the approach is wrong, say "This is wrong because..."
-- If there's a simpler way, say "Why are we doing X when Y is simpler?"
-- If documentation exists, READ IT instead of assuming
-- If code seems malicious or dangerous, REFUSE and explain why
-- If a task will create more complexity, say "This adds complexity, not value"
+## STRAT Bar Classification (MANDATORY)
 
-## MANDATORY: Read HANDOFF.md First
+Every directional bar MUST be classified as 2U (bullish) or 2D (bearish).
+Never use just "2".
 
-**CRITICAL RULE**: Before ANY work in ANY session, ALWAYS read:
-```
-C:\Strat_Trading_Bot\vectorbt-workspace\docs\HANDOFF.md
-```
+| Correct | Incorrect |
+|---------|-----------|
+| 2D-2U | 2-2 |
+| 3-2U, 3-2D | 3-2 |
+| 3-2U-2U, 3-2D-2D | 3-2-2 |
+| 2U-1-2U, 2D-1-2D | 2-1-2 |
+| 3-1-2U, 3-1-2D | 3-1-2 (OK - only exit bar needs direction) |
 
-**HANDOFF.md contains:**
-- Current session state and progress
-- Recent changes and decisions
-- What's working vs broken
-- Immediate next steps
-- File status (keep/delete/create)
+Bar types: 1=inside, 2U=up, 2D=down, 3=outside
 
-**Never skip this step. Current state context prevents wasted work.**
+## STRAT Entry Timing (ZERO TOLERANCE)
 
-## Working Relationship
-- Software development expert specializing in Python and algorithmic trading systems
-- Always ask for clarification before assumptions
-- Prioritize code quality, testing, and maintainable architecture
-- Never deploy without validation and error handling
-- Question problematic designs and suggest alternatives
-- Focus on simplification, not adding features
-- DELETE redundant code rather than archiving
+**Entry happens ON THE BREAK, not at bar close.** This is the most common
+implementation error and the source of the largest backtest-vs-live drift
+in the parent ATLAS project.
 
-## CRITICAL: Date and Timezone Handling for Market Data
+| Concept | Rule |
+|---------|------|
+| Entry is LIVE | When price breaks trigger level, enter IMMEDIATELY |
+| Forming bar classification | Only "1" if it stays INSIDE prior range - NOT automatic |
+| Pre/post market gaps | Bar can OPEN as 2U/2D due to overnight action |
+| Pattern completion | Happens the MOMENT price breaks, not at bar close |
 
-**ZERO TOLERANCE - THIS IS NON-NEGOTIABLE FOR PRODUCTION USE**
+**Scanner-specific implication:**
 
-All market data fetches MUST use correct year and timezone. Failure causes 0% accuracy with TradingView and invalid trading signals.
+- The scanner reports patterns based on the most-recent CLOSED bar plus the
+  in-flight FORMING bar.
+- The forming bar is NOT automatically a "1" - reclassify on every poll.
+- If the user asks "did the 3-1-2 just complete?" the answer is yes the
+  moment price prints through the trigger, not at the next bar close.
 
-### The Mandatory Pattern
+See `strat-methodology` skill `EXECUTION.md` "CRITICAL: Entry Timing" section.
 
-**CORRECT:**
-```python
-# ALWAYS specify tz='America/New_York' for US market data
-data = vbt.AlpacaData.pull(
-    'AAPL',
-    start='2025-11-01',  # CRITICAL: Use correct year!
-    end='2025-11-20',
-    timeframe='1d',
-    tz='America/New_York',  # CRITICAL: Prevents UTC date shifts!
-    client_config=dict(api_key=key, secret_key=secret, paper=True)
-)
-```
+## Data Sources
 
-**WRONG (Causes Complete Failure):**
-```python
-# Missing timezone causes UTC midnight = previous day 7PM ET (date shift!)
-data = vbt.AlpacaData.pull('AAPL', start='2024-11-01', end='2024-11-20')
-# Result: Weekend dates appear, 0% match with TradingView
-```
+| Source | Use Case |
+|--------|----------|
+| Alpaca (SIP feed) | Primary - all equities and ETFs |
 
-### Verification Checklist
+**ALWAYS:** `tz='America/New_York'` on all data fetches.
 
-Before using ANY fetched data:
-```python
-# 1. Check for weekend dates (MUST be zero)
-for idx in data.index:
-    weekday = idx.strftime('%A')
-    assert weekday not in ['Saturday', 'Sunday'], f"Weekend date found: {idx}"
+**NEVER:** Synthetic data, mock OHLCV generators, yfinance for equities.
 
-# 2. Verify timezone is America/New_York (not UTC)
-assert data.index.tz.zone == 'America/New_York', f"Wrong timezone: {data.index.tz}"
+Tradier migration is in progress on a separate feature branch; once
+shipped, Tradier replaces Alpaca as the primary data source. Until then,
+treat the scanner as broken in any environment where Alpaca credentials
+are unavailable. See `docs/HANDOFF.md` for migration status.
 
-# 3. Display newest-to-oldest with dates for manual verification
-from strat import classify_bars, format_bar_classifications
-classifications = classify_bars(data['High'], data['Low'])
-labels = format_bar_classifications(classifications, skip_reference=True)
+## Market Data Rules
 
-for i in range(len(dates) - 1, -1, -1):  # Newest to oldest
-    print(f"{dates[i].strftime('%Y-%m-%d %a')}: {labels[i]}")
-```
+- Filter weekends: `data.index.dayofweek < 5`
+- Verify no Saturday/Sunday bars before any analysis
+- US holiday filtering: use `pandas_market_calendars` if/when added
 
-### Why This Matters
+## MCP Server Health and Transport Integrity
 
-**Without proper timezone:**
-- UTC midnight timestamps shift dates backward by 1 day
-- November 19 UTC = November 18 Eastern Time
-- Weekend dates (Saturday/Sunday) appear in results
-- Bar classifications mismatch TradingView by 100%
-- Pattern detection completely fails
-- Invalid trading signals generated
+The scanner is reached via MCP-over-SSE from the mobile Claude client. Two
+classes of bug exist:
 
-**Test conducted 2025-11-19:**
-- Wrong pattern (2024 data, no timezone): 0% match
-- Correct pattern (2025 data, America/New_York): 100% match
+1. **Transport bugs** - SSE handshake, OAuth flow, 307 redirects on
+   `/messages`, session-id mismatches. Symptom: tools listed but every call
+   errors. See HANDOFF.md history for prior fixes.
+2. **Data-path bugs** - tool registered, transport healthy, but the
+   underlying data provider returns empty or wrong-timezone data.
 
-### Applies To
+Before changing transport code, verify the change against the official MCP
+Python SDK. Before changing the data path, verify timezone handling.
 
-- AlpacaData.pull() - ALWAYS use tz='America/New_York'
-- TiingoData fetches - Convert UTC timestamps to ET
-- All STRAT bar classification
-- All pattern detection
-- All backtesting operations
-- Any data displayed to user for verification
+## Real-Time Data Freshness
 
-**ENFORCEMENT:** If you fetch data without specifying timezone, you MUST add it. No exceptions.
+The mobile-app use case is "what is happening RIGHT NOW," so:
 
+- Intraday timeframes (15m, 60m) MUST include the forming bar
+- 1d and higher MAY use last closed bar if the day hasn't closed
+- Quote endpoints SHOULD return last trade timestamp so the client can
+  show "as of 14:32 ET" to the user
+- If a fetch errors, fail loudly - do NOT return stale cached data without
+  flagging it as stale
+
+## Railway Deployment Context
+
+- Server URL: `https://strat-stock-scanner-production.up.railway.app`
+- Deploy: `git push origin main` triggers Railway redeploy
+- Env vars are managed in the Railway dashboard, NOT in `.env` files in
+  the repo
+- Health endpoint: `/health` (returns 200 when up)
+- OAuth metadata: `/.well-known/oauth-protected-resource`
+- Logs: Railway dashboard or `railway logs`
+
+Never deploy code with failing local tests. Run `uv run pytest tests/ -x -q`
+locally before any push to `main`.
+
+## Security Rules
+
+- NEVER commit `.env` files (use `.env.example` for templates)
+- NEVER hardcode API keys, secrets, or VPS IP addresses in source or docs
+- The GitHub repo is PUBLIC - assume any committed string is world-readable
+- Flask/FastAPI servers default to `127.0.0.1` for any local-dev binding;
+  Railway sets the production bind via env var
+- NEVER pass `debug=True` to Flask/FastAPI in production
+- OAuth tokens: short TTL (<= 1h), rotate JWT signing key on credential
+  leak suspicion
+
+## Account Constraints (inherited)
+
+Schwab Level 1 Options (cash account):
+- CAN: Long stock, long calls/puts, cash-secured puts
+- CANNOT: Short stock, naked options, spreads
+
+The scanner itself does not place trades, so this is only relevant if the
+user is using the scanner's output to inform manual orders.
 
 ## DO NOT
 
-1. Use emojis or special characters in ANY output
+- Skip HANDOFF.md at session start
+- Skip the `strat-methodology` skill when touching STRAT detection code
+- Use yfinance for equity data
+- Generate synthetic or mock OHLCV
+- Use unclassified "2" bars (must be 2U or 2D)
+- Wait for bar close to report a STRAT entry as triggered
+- Commit `.env`, credentials, or VPS IP addresses
+- Pass `debug=True` to production servers
+- Use `cd <path> && git` compound commands (use `git -C <path>` instead)
 
+## Hook Infrastructure
 
+Hooks wire to the parent `.claude/hooks/` directory:
 
+| Hook | Event | Script |
+|------|-------|--------|
+| Trading safety guard | PreToolUse | `C:/Strat_Trading_Bot/.claude/hooks/safety_guard.py --scope trading` |
+| Ruff auto-lint | PostToolUse | `C:/Strat_Trading_Bot/.claude/hooks/post_edit_lint.py` |
 
-### 6. Git Commit and Push
-**CRITICAL: Verify README.md reflects current project status before committing.**
+Do NOT modify hook scripts in this repo - they live in the parent
+directory and are shared across all projects.
 
-**Files excluded from remote (internal documentation):**
-- Session documentation (SESSION_XX_RESULTS.md, .session_startup_prompt*.md)
-- Visualization outputs (visualization/, *.html files from exploratory analysis)
-- Debug/test scripts (debug_*.py, test_*.py unless part of test suite)
-- Internal guides (HANDOFF.md, development session notes)
-- Workspace settings (.claude/)
+## Key Commands
 
-**Files included in remote (production code only):**
-- Core implementation (regime/, strategies/, integrations/, core/, data/, utils/)
-- Test suite (tests/ directory)
-- Configuration (pyproject.toml, uv.lock, .env.template)
-- Public documentation (README.md, LICENSE)
-
-**Standard workflow:**
 ```bash
-# Review what will be committed
-git status
+# Run all tests
+uv run pytest tests/ -v
 
-# Stage production code only
-git add regime/ strategies/ integrations/ core/ data/ utils/ tests/
-git add pyproject.toml uv.lock README.md
+# Run a single test file
+uv run pytest tests/test_auth.py -v
 
-# Commit with professional message (NO emojis, NO AI attribution)
-git commit -m "feat: implement multi-asset portfolio backtesting framework
+# Smoke test (quick)
+uv run pytest tests/ -x -q
 
-Add VectorBT Portfolio.from_orders integration for rebalancing strategies.
-Implement allocation matrix builder with forward-fill logic between rebalances.
-Add stock scanner bridge for momentum strategy portfolio execution.
-
-Tested with technology sector universe (30 stocks, top 10 portfolio).
-Identified volume filter calibration requirements for multi-asset portfolios."
-
-# Push to remote
-git push origin main
+# Local server
+uv run python server.py
 ```
 
-**Commit message format (conventional commits):**
-- Type: fix/feat/docs/test/refactor
-- Brief description (50 chars max, lowercase, no period)
-- Blank line
-- Detailed explanation (what changed and why)
-- Results/metrics if applicable
-- NO emojis, NO special characters, NO AI attribution
+Git commands: always use `git -C <path>` instead of `cd <path> && git`
+to avoid compound-command approval prompts.
 
-### Why This Matters
-- Clean remote repository (code only, no internal notes)
+## Reference
 
-## Summary: Critical Workflows
-
-### Every Session:
-```
-1. Read HANDOFF.md (mandatory first step)
-2. Read CLAUDE.md sections 1-7 (refresh rules)
-4. Check Next Actions in HANDOFF.md
-5. Plan approach (which files to modify, what to test)
-```
-
-### Every Claim:
-```
-1. Test the code (actually run it)
-2. Verify output (check results are correct)
-3. Measure performance (back with numbers)
-4. Show evidence (paste actual output)
-5. Document in HANDOFF.md
-```
-
-### Zero Tolerance Items:
-- Emojis or special characters in ANY output
-- Skipping HANDOFF.md at session start
-- Claiming code works without testing
-
+| Tier | File | When to Read |
+|------|------|--------------|
+| 1 | `docs/HANDOFF.md`, `CLAUDE.md` | Every session |
+| 2 | `docs/SCANNER_STATUS_BRIEF.md` | When verifying deployment health |
+| 3 | `docs/INDEX.md` | When looking for any other doc |
