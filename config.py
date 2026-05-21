@@ -1,38 +1,47 @@
 """
-Configuration management for STRAT Stock Scanner
-Centralizes all environment variables and settings
+Configuration management for STRAT Stock Scanner.
+
+All values are read from environment variables at process start. Secrets are
+NEVER baked into a Dockerfile (the deploy uses Railway's NIXPACKS builder, so
+secrets are injected at runtime via Railway env vars).
 """
 
+import logging
+
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables"""
+    """Application settings loaded from environment variables."""
 
-    # Alpaca API Configuration
-    ALPACA_API_KEY: str
-    ALPACA_API_SECRET: str
-    ALPACA_BASE_URL: str = "https://data.alpaca.markets/v2"
+    # --- Tradier API Configuration ------------------------------------------
+    # Single bearer token; production data API.
+    TRADIER_API_TOKEN: str
+    TRADIER_API_BASE_URL: str = "https://api.tradier.com/v1"
+    # Sandbox is reserved for a future toggle (delayed data, paper). v1 of the
+    # migration ships production-only; this is read but not surfaced through
+    # the request path unless TRADIER_USE_SANDBOX is True AND the sandbox
+    # token is present.
+    TRADIER_USE_SANDBOX: bool = False
+    TRADIER_SANDBOX_TOKEN: str | None = None
 
-    # OAuth 2.1 Configuration
+    # --- OAuth 2.1 Configuration --------------------------------------------
     JWT_SECRET_KEY: str
     OAUTH_CLIENT_ID: str = "claude-mcp-client"
-    OAUTH_CLIENT_SECRET: Optional[str] = None
+    OAUTH_CLIENT_SECRET: str | None = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Data Feed Configuration
-    ALPACA_DATA_FEED: str = "sip"  # "sip" for Algo Trader Plus, "iex" for free tier
-    ALPACA_QUOTE_FEED: str = ""    # Override for quotes; empty = use ALPACA_DATA_FEED
+    # --- Rate Limiting Configuration ----------------------------------------
+    # Tradier production endpoints are documented at 60-120 req/min/endpoint;
+    # we cap below the lower bound as a safety margin.
+    RATE_LIMIT_PER_MINUTE: int = 100
+    MAX_CONCURRENT_REQUESTS: int = 4
 
-    # Rate Limiting Configuration
-    ALPACA_REQUESTS_PER_MINUTE: int = 9000  # Algo Trader Plus allows 10,000
-    MAX_CONCURRENT_REQUESTS: int = 10
-
-    # Server Configuration
+    # --- Server Configuration -----------------------------------------------
     PORT: int = 8080
     DEBUG: bool = False
+    LOG_LEVEL: str = "INFO"
     SERVER_URL: str = "http://localhost:8080"  # Override with Railway URL in production
 
     class Config:
@@ -43,3 +52,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def configure_logging() -> None:
+    """Configure root logging once at process start. Format is structured-ish
+    (key=value) so Railway log search works without a JSON parser."""
+    level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+configure_logging()
