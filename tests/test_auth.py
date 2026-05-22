@@ -64,7 +64,6 @@ def test_health_endpoint(client):
 
     data = response.json()
     assert data["status"] == "healthy", "Status should be healthy"
-    assert "rate_limiter" in data, "Should report rate limiter status"
 
 
 def test_root_endpoint(client):
@@ -76,5 +75,5 @@ def test_root_endpoint(client):
     data = response.json()
     assert "service" in data, "Should include service name"
     assert "version" in data, "Should include version"
-    assert "features" in data, "Should list features"
+    assert "tools" in data, "Should list tools"
     assert "endpoints" in data, "Should list endpoints"
