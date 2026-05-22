@@ -69,6 +69,25 @@ HOURLY_AGG_FACTOR = 4
 _ET = pytz.timezone("America/New_York")
 _SESSION_CLOSE = (16, 0)
 
+# US regular-session open in ET. Used by the 1Hour aggregator to align buckets
+# to 9:30 / 10:30 / 11:30 / ... rather than UTC midnight, which matches how
+# TradingView presents hourly bars.
+_SESSION_OPEN_HOUR = 9
+_SESSION_OPEN_MINUTE = 30
+
+
+def _to_tradier_symbol(symbol: str) -> str:
+    """Translate the canonical scanner symbol form to Tradier's wire form.
+    Tradier uses '/' to separate class shares (BRK.B is written BRK/B). Idempotent
+    on symbols without a dot."""
+    return symbol.replace(".", "/")
+
+
+def _from_tradier_symbol(symbol: str) -> str:
+    """Inverse of _to_tradier_symbol — translate Tradier's wire form back to the
+    scanner's canonical form so caller-side keys (ETF holding lists, etc.) match."""
+    return symbol.replace("/", ".")
+
 
 def _date_to_session_close_utc(date_str: str) -> str:
     """Normalize a YYYY-MM-DD Tradier history date to a UTC ISO timestamp at
@@ -93,7 +112,14 @@ def _normalize_intraday_timestamp(ts_str: str) -> str:
 
 
 def _date_param(dt: datetime, granular: bool = False) -> str:
-    """Tradier accepts YYYY-MM-DD for history; YYYY-MM-DD HH:MM for timesales."""
+    """Tradier accepts YYYY-MM-DD for history; YYYY-MM-DD HH:MM for timesales.
+
+    Tradier interprets both date forms as US/Eastern local time. Any tz-aware
+    datetime (typically UTC from get_bars_recent) must be converted to ET before
+    formatting, otherwise the request queries a wall-clock-shifted window and
+    silently misses bars at session boundaries."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(_ET)
     if granular:
         return dt.strftime("%Y-%m-%d %H:%M")
     return dt.strftime("%Y-%m-%d")
@@ -115,13 +141,20 @@ class TradierClient:
     """
 
     def __init__(self) -> None:
-        self.base_url = settings.TRADIER_API_BASE_URL.rstrip("/")
-        # Sandbox token toggle is a future hook only; v1 ships production-only.
-        token = (
-            settings.TRADIER_SANDBOX_TOKEN
-            if settings.TRADIER_USE_SANDBOX and settings.TRADIER_SANDBOX_TOKEN
-            else settings.TRADIER_API_TOKEN
-        )
+        # base_url and token derive from a single switch (TRADIER_USE_SANDBOX) so
+        # they cannot drift; previously they were two independent settings, which
+        # let a sandbox token be sent to the production endpoint and 401.
+        if settings.TRADIER_USE_SANDBOX:
+            self.base_url = "https://sandbox.tradier.com/v1"
+            token = settings.TRADIER_SANDBOX_TOKEN or settings.TRADIER_API_TOKEN
+        else:
+            self.base_url = "https://api.tradier.com/v1"
+            token = settings.TRADIER_API_TOKEN
+        if not token:
+            raise RuntimeError(
+                "TRADIER_API_TOKEN (or TRADIER_SANDBOX_TOKEN when "
+                "TRADIER_USE_SANDBOX=true) must be set"
+            )
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -255,7 +288,7 @@ class TradierClient:
             "as": int(tradier_quote.get("asksize") or 0),
             "t": t_iso,
             "last": float(tradier_quote.get("last") or 0.0),
-            "symbol": tradier_quote.get("symbol", ""),
+            "symbol": _from_tradier_symbol(tradier_quote.get("symbol", "")),
         }
 
     @staticmethod
@@ -296,10 +329,11 @@ class TradierClient:
         """Fetch a single quote. Returns the normalized quote dict (with bp,
         ap, etc.) or None when the symbol is unknown / request failed."""
         symbol = ticker.upper()
+        wire = _to_tradier_symbol(symbol)
         body = await self._request(
             "GET",
             "/markets/quotes",
-            params={"symbols": symbol, "greeks": "false"},
+            params={"symbols": wire, "greeks": "false"},
             symbol_log=symbol,
         )
         if body is None:
@@ -307,7 +341,8 @@ class TradierClient:
         quotes = self._extract_quotes(body)
         if not quotes:
             unmatched = self._extract_unmatched(body)
-            if symbol in unmatched:
+            unmatched_canonical = [_from_tradier_symbol(u) for u in unmatched]
+            if symbol in unmatched_canonical:
                 logger.warning(
                     "tradier symbol not found (endpoint=/markets/quotes symbol=%s)",
                     symbol,
@@ -319,12 +354,13 @@ class TradierClient:
         """Batch-fetch quotes for many tickers in a single API call. Uses
         POST for >10 symbols (form-encoded) per the spec's rate-budget note.
         Returns a {symbol: quote_or_None} map preserving input case-folded
-        keys (uppercased)."""
+        keys (uppercased canonical form, e.g. BRK.B not BRK/B)."""
         symbols = [t.upper() for t in tickers]
         if not symbols:
             return {}
 
-        symbols_param = ",".join(symbols)
+        wire_symbols = [_to_tradier_symbol(s) for s in symbols]
+        symbols_param = ",".join(wire_symbols)
         if len(symbols) > 10:
             body = await self._request(
                 "POST",
@@ -345,9 +381,10 @@ class TradierClient:
             return result
 
         for q in self._extract_quotes(body):
-            sym = (q.get("symbol") or "").upper()
-            if sym in result:
-                result[sym] = self._normalize_quote(q)
+            wire_sym = (q.get("symbol") or "").upper()
+            canonical_sym = _from_tradier_symbol(wire_sym)
+            if canonical_sym in result:
+                result[canonical_sym] = self._normalize_quote(q)
         return result
 
     # -- Public: history (daily / weekly / monthly) ---------------------------
@@ -401,11 +438,10 @@ class TradierClient:
             "GET",
             "/markets/history",
             params={
-                "symbol": symbol,
+                "symbol": _to_tradier_symbol(symbol),
                 "interval": interval,
                 "start": _date_param(start),
                 "end": _date_param(end),
-                "session_filter": "all",
             },
             symbol_log=symbol,
         )
@@ -442,25 +478,46 @@ class TradierClient:
 
     @staticmethod
     def _aggregate_to_hourly(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Aggregate 15min bars into 1hour OHLCV bars. Buckets by the hour of
-        the bar's UTC timestamp; each bucket contributes O=first.O, H=max,
-        L=min, C=last.C, V=sum. Bars whose hour bucket has fewer than the
-        full HOURLY_AGG_FACTOR count are still emitted (the most recent
-        forming hour will be partial)."""
+        """Aggregate 15min bars into 1H buckets aligned to the 9:30 ET session
+        open. Buckets cover 9:30-10:30, 10:30-11:30, ..., 14:30-15:30 ET, plus
+        a partial 15:30-16:00 ET bucket containing the last two 15min bars of
+        the regular session. Bucket keys are the bucket-open time as a UTC ISO
+        string. Bars outside regular hours (only possible if the caller
+        bypasses session_filter=open) are bucketed by their containing
+        :30-aligned hour and may produce unusual keys.
+
+        Each bucket emits O=first.O, H=max, L=min, C=last.C, V=sum."""
         if not bars:
             return []
 
-        # group by (hour-bucket-start) using the bar's normalized UTC ISO ts
         from collections import OrderedDict
 
         buckets: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
         for b in bars:
             ts = b["t"]
-            # truncate "YYYY-MM-DDTHH:MM:SSZ" to "YYYY-MM-DDTHH:00:00Z"
-            if len(ts) >= 13 and ts[10] == "T":
-                bucket_key = ts[:13] + ":00:00Z"
-            else:
-                bucket_key = ts
+            try:
+                dt_utc = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+                dt_et = dt_utc.astimezone(_ET)
+            except Exception:
+                # Defensive: if a timestamp ever fails to parse, key by its
+                # raw string so the bar is not silently dropped.
+                buckets.setdefault(ts, []).append(b)
+                continue
+
+            # Compute the open-aligned bucket. Each bucket opens on a :30
+            # minute mark on a one-hour stride from 9:30 ET. The number of
+            # minutes elapsed since the most recent bucket open is therefore
+            # ((minutes-since-9:30-ET) mod 60). Subtracting that gets us back
+            # to the bucket-open instant.
+            minutes_since_open = (
+                (dt_et.hour - _SESSION_OPEN_HOUR) * 60
+                + (dt_et.minute - _SESSION_OPEN_MINUTE)
+            )
+            minutes_into_bucket = minutes_since_open % 60
+            bucket_open_et = (
+                dt_et - timedelta(minutes=minutes_into_bucket)
+            ).replace(second=0, microsecond=0)
+            bucket_key = bucket_open_et.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
             buckets.setdefault(bucket_key, []).append(b)
 
         agg: list[dict[str, Any]] = []
@@ -496,11 +553,14 @@ class TradierClient:
             "GET",
             "/markets/timesales",
             params={
-                "symbol": symbol,
+                "symbol": _to_tradier_symbol(symbol),
                 "interval": interval,
                 "start": _date_param(start, granular=True),
                 "end": _date_param(end, granular=True),
-                "session_filter": "all",
+                # Regular session only — including pre/post-market widens OHLCV
+                # ranges and silently flips STRAT bar classifications relative
+                # to what TradingView shows.
+                "session_filter": "open",
             },
             symbol_log=symbol,
             timeout=25.0,

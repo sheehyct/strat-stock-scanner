@@ -146,25 +146,37 @@ def test_normalize_timesales_bar_internal_shape():
     assert bar["t"].endswith("Z")
 
 
-def test_hourly_aggregation_from_15min():
-    """8x 15min bars rolled up to hourly buckets. With bars at 09:30, 09:45,
-    10:00, 10:15, 10:30, 10:45, 11:00, 11:15 ET, the UTC-bucket boundaries
-    produce 3 hourly buckets covering the 13/14/15 UTC hours."""
+def test_hourly_aggregation_session_open_aligned():
+    """8x 15min bars from 2024-05-17 09:30-11:15 ET roll up to exactly two
+    1H buckets aligned to the 9:30 ET session open, not UTC hour boundaries.
+    Bucket 1: 09:30-10:30 ET (4 sub-bars); Bucket 2: 10:30-11:30 ET (4 sub-bars).
+    During EDT (UTC-4) the bucket open times in UTC are 13:30 and 14:30."""
     body = _load("timesales_15min.json")
     raw_bars = [
         TradierClient._normalize_timesales_bar(b) for b in TradierClient._extract_timesales(body)
     ]
     hourly = TradierClient._aggregate_to_hourly(raw_bars)
-    # The two boundary bars (10:00 ET => 14:00 UTC and 11:00 ET => 15:00 UTC)
-    # fall into their own hour buckets; aggregation should produce at least 3
-    # and at most 4 buckets depending on bucket-boundary semantics.
-    assert 3 <= len(hourly) <= 4
 
-    # Each bucket key must be a top-of-hour UTC ISO string.
-    for h in hourly:
-        assert h["t"].endswith(":00:00Z"), f"bucket key {h['t']} is not top of hour"
-        # Volume should equal the sum of contributing native bars (sanity).
-        assert h["v"] > 0
+    assert len(hourly) == 2, f"expected exactly 2 buckets, got {len(hourly)}"
+
+    # Bucket keys are open-aligned (:30:00Z), not UTC-hour aligned. The
+    # previous UTC-bucket implementation would have emitted :00:00Z keys.
+    assert hourly[0]["t"] == "2024-05-17T13:30:00Z"
+    assert hourly[1]["t"] == "2024-05-17T14:30:00Z"
+
+    # Bucket 1 (9:30-10:30 ET) = 9:30, 9:45, 10:00, 10:15 sub-bars.
+    assert hourly[0]["o"] == pytest.approx(189.10)
+    assert hourly[0]["h"] == pytest.approx(189.95)
+    assert hourly[0]["l"] == pytest.approx(188.95)
+    assert hourly[0]["c"] == pytest.approx(189.62)
+    assert hourly[0]["v"] == 1000010 + 850020 + 760030 + 700040
+
+    # Bucket 2 (10:30-11:30 ET) = 10:30, 10:45, 11:00, 11:15 sub-bars.
+    assert hourly[1]["o"] == pytest.approx(189.62)
+    assert hourly[1]["h"] == pytest.approx(189.95)
+    assert hourly[1]["l"] == pytest.approx(189.20)
+    assert hourly[1]["c"] == pytest.approx(189.78)
+    assert hourly[1]["v"] == 650050 + 540060 + 590070 + 510080
 
 
 # --- Fault payload handling --------------------------------------------------

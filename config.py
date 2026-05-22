@@ -15,13 +15,10 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # --- Tradier API Configuration ------------------------------------------
-    # Single bearer token; production data API.
+    # The base URL is derived from TRADIER_USE_SANDBOX inside TradierClient so
+    # that the token (production vs sandbox) and the endpoint cannot drift
+    # apart. There is intentionally no override knob for the URL itself.
     TRADIER_API_TOKEN: str
-    TRADIER_API_BASE_URL: str = "https://api.tradier.com/v1"
-    # Sandbox is reserved for a future toggle (delayed data, paper). v1 of the
-    # migration ships production-only; this is read but not surfaced through
-    # the request path unless TRADIER_USE_SANDBOX is True AND the sandbox
-    # token is present.
     TRADIER_USE_SANDBOX: bool = False
     TRADIER_SANDBOX_TOKEN: str | None = None
 
