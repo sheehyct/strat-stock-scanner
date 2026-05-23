@@ -1,65 +1,52 @@
 """
-Rate limiter for Alpaca API calls
-Handles configurable requests/minute limit with exponential backoff and concurrent request limiting
+Generic async rate limiter used by the Tradier client.
+
+Handles:
+    - Sliding-window requests-per-minute throttle
+    - Concurrent request cap via asyncio.Semaphore
+    - Exponential backoff on 429 responses (one retry by default per spec)
+    - Structured logging on retries and terminal failures
+
+This module deliberately is NOT vendor-coupled; the only place a provider
+name shows up is the logger field strings.
 """
 
 import asyncio
-import httpx
-from typing import Optional
+import logging
 from datetime import datetime, timedelta
+
+import httpx
 from config import settings
 
+logger = logging.getLogger(__name__)
 
-class AlpacaRateLimiter:
-    """
-    Rate limiter for Alpaca API calls
 
-    Manages:
-    - Requests per minute limit (configured via settings)
-    - Maximum concurrent requests (configured via settings)
-    - Exponential backoff on 429 rate limit errors
-    - Automatic retry logic with configurable max attempts
-    """
+class APIRateLimiter:
+    """Rolling-window requests-per-minute limiter with concurrent cap."""
 
-    def __init__(self, requests_per_minute: int = 180, max_concurrent: int = 3):
-        """
-        Initialize rate limiter
-
-        Args:
-            requests_per_minute: Maximum requests allowed per minute (default 180)
-            max_concurrent: Maximum concurrent requests (default 3)
-        """
+    def __init__(self, requests_per_minute: int = 100, max_concurrent: int = 4) -> None:
         self.requests_per_minute = requests_per_minute
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.request_times = []
+        self.request_times: list[datetime] = []
         self.lock = asyncio.Lock()
 
-    async def acquire(self):
-        """
-        Wait until a request slot is available
-        Enforces requests per minute limit by tracking request timestamps
-        """
+    async def acquire(self) -> None:
         async with self.lock:
             now = datetime.now()
-
-            # Remove requests older than 1 minute
-            self.request_times = [
-                t for t in self.request_times
-                if now - t < timedelta(minutes=1)
-            ]
-
-            # Wait if at limit
+            self.request_times = [t for t in self.request_times if now - t < timedelta(minutes=1)]
             if len(self.request_times) >= self.requests_per_minute:
                 sleep_time = 60 - (now - self.request_times[0]).total_seconds()
                 if sleep_time > 0:
+                    logger.info(
+                        "rate_limit throttling sleep_seconds=%.2f current_window=%d",
+                        sleep_time,
+                        len(self.request_times),
+                    )
                     await asyncio.sleep(sleep_time)
-                    # Clean up old requests after sleeping
                     now = datetime.now()
                     self.request_times = [
-                        t for t in self.request_times
-                        if now - t < timedelta(minutes=1)
+                        t for t in self.request_times if now - t < timedelta(minutes=1)
                     ]
-
             self.request_times.append(now)
 
     async def make_request(
@@ -67,63 +54,59 @@ class AlpacaRateLimiter:
         client: httpx.AsyncClient,
         method: str,
         url: str,
-        max_retries: int = 3,
-        **kwargs
-    ) -> Optional[httpx.Response]:
-        """
-        Make HTTP request with rate limiting and retry logic
+        max_retries: int = 2,
+        **kwargs,
+    ) -> httpx.Response | None:
+        """Execute one HTTP request through the limiter. On 429, retries once
+        with exponential backoff (per spec: "one retry max, then bubble up").
 
-        Features:
-        - Enforces concurrent request limit via semaphore
-        - Tracks requests per minute
-        - Exponential backoff on 429 errors (2^attempt seconds)
-        - Retries on network errors
-
-        Args:
-            client: httpx AsyncClient instance
-            method: HTTP method (GET, POST, etc.)
-            url: Request URL
-            max_retries: Maximum retry attempts (default 3)
-            **kwargs: Additional arguments passed to client.request()
-
-        Returns:
-            Response object or None if all retries failed
+        Returns the Response object (even for non-200 statuses other than 429
+        that retries don't recover) or None if all retries failed.
         """
         async with self.semaphore:
             for attempt in range(max_retries):
                 await self.acquire()
-
                 try:
                     response = await client.request(method, url, **kwargs)
-
                     if response.status_code == 429:
-                        # Rate limited - exponential backoff
-                        wait_time = 2 ** attempt
-                        print(f"Rate limited on {url}, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+                        wait_time = 2**attempt
+                        logger.warning(
+                            "rate_limit 429 url=%s attempt=%d/%d backoff_seconds=%d",
+                            url,
+                            attempt + 1,
+                            max_retries,
+                            wait_time,
+                        )
                         await asyncio.sleep(wait_time)
                         continue
-
-                    # Return response (even if error status - let caller handle)
                     return response
-
-                except httpx.TimeoutException as e:
-                    print(f"Timeout on {url} (attempt {attempt + 1}/{max_retries}): {e}")
+                except httpx.TimeoutException:
+                    logger.exception(
+                        "rate_limit timeout url=%s attempt=%d/%d",
+                        url,
+                        attempt + 1,
+                        max_retries,
+                    )
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
+                        await asyncio.sleep(2**attempt)
+                    continue
+                except Exception:
+                    logger.exception(
+                        "rate_limit request error url=%s attempt=%d/%d",
+                        url,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2**attempt)
                     continue
 
-                except Exception as e:
-                    print(f"Request error on {url} (attempt {attempt + 1}/{max_retries}): {e}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                    continue
-
-            print(f"Failed after {max_retries} attempts: {url}")
+            logger.error("rate_limit failed_after_retries url=%s retries=%d", url, max_retries)
             return None
 
 
-# Global rate limiter instance - uses configured values
-alpaca_limiter = AlpacaRateLimiter(
-    requests_per_minute=settings.ALPACA_REQUESTS_PER_MINUTE,
-    max_concurrent=settings.MAX_CONCURRENT_REQUESTS
+# Global limiter; instances are safe to share across asyncio tasks.
+api_rate_limiter = APIRateLimiter(
+    requests_per_minute=settings.RATE_LIMIT_PER_MINUTE,
+    max_concurrent=settings.MAX_CONCURRENT_REQUESTS,
 )

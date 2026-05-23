@@ -3,30 +3,24 @@ STRAT Stock Scanner - Remote MCP Server with OAuth 2.1
 Uses official MCP Python SDK with SSE transport for remote access
 """
 
-import asyncio
 from contextlib import asynccontextmanager
+
+import tools
+import uvicorn
+from auth_server import router as auth_router
+from config import settings
+from fastapi import FastAPI, Request
+from jose import JWTError, jwt
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent
-from fastapi import FastAPI, Depends, Request
-from fastapi.responses import StreamingResponse
-import uvicorn
+from mcp.types import TextContent, Tool
 
-from config import settings
-from auth_middleware import verify_token
-from auth_server import router as auth_router
-from jose import jwt, JWTError
-import tools
 
 # Helper function to validate token string (for SSE endpoints)
 async def validate_token_string(token: str) -> dict:
     """Validate a raw JWT token string"""
     try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=["HS256"]
-        )
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
 
         # Verify token type and claims
         if payload.get("token_type") != "access" or not payload.get("sub"):
@@ -34,7 +28,7 @@ async def validate_token_string(token: str) -> dict:
 
         return payload
     except (jwt.ExpiredSignatureError, JWTError) as e:
-        raise ValueError(f"Token validation failed: {str(e)}")
+        raise ValueError(f"Token validation failed: {e!s}")
 
 
 # Create MCP server instance
@@ -45,9 +39,9 @@ mcp_server = Server("strat-stock-scanner")
 async def lifespan(app: FastAPI):
     """Lifespan context for FastAPI app"""
     print(f"STRAT Stock Scanner MCP Server starting on port {settings.PORT}")
-    print(f"MCP SSE endpoint: /sse")
-    print(f"MCP messages endpoint: /messages")
-    print(f"OAuth metadata: /.well-known/oauth-protected-resource")
+    print("MCP SSE endpoint: /sse")
+    print("MCP messages endpoint: /messages")
+    print("OAuth metadata: /.well-known/oauth-protected-resource")
     yield
     print("Server shutting down")
 
@@ -56,7 +50,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="STRAT Stock Scanner MCP Server",
     description="Remote MCP server with OAuth 2.1 authentication",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Mount OAuth endpoints (authorization, token, metadata)
@@ -76,11 +70,11 @@ async def list_tools():
                 "properties": {
                     "ticker": {
                         "type": "string",
-                        "description": "Stock symbol (e.g. AAPL, TSLA, SPY)"
+                        "description": "Stock symbol (e.g. AAPL, TSLA, SPY)",
                     }
                 },
-                "required": ["ticker"]
-            }
+                "required": ["ticker"],
+            },
         ),
         Tool(
             name="analyze_strat_patterns",
@@ -89,11 +83,19 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "ticker": {"type": "string", "description": "Stock symbol"},
-                    "timeframe": {"type": "string", "default": "1Day", "description": "Bar timeframe (1Day, 1Hour)"},
-                    "days_back": {"type": "integer", "default": 10, "description": "Days of history to analyze"}
+                    "timeframe": {
+                        "type": "string",
+                        "default": "1Day",
+                        "description": "Bar timeframe (1Day, 1Hour)",
+                    },
+                    "days_back": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Days of history to analyze",
+                    },
                 },
-                "required": ["ticker"]
-            }
+                "required": ["ticker"],
+            },
         ),
         Tool(
             name="scan_sector_for_strat",
@@ -103,16 +105,35 @@ async def list_tools():
                 "properties": {
                     "sector": {
                         "type": "string",
-                        "description": "Sector name (technology, healthcare, energy, financials, consumer, industrials, materials, utilities, real_estate, communications)"
+                        "description": "Sector name (technology, healthcare, energy, financials, consumer, industrials, materials, utilities, real_estate, communications)",
                     },
-                    "top_n": {"type": "integer", "default": 20, "description": "Number of stocks to scan (max 100)"},
-                    "pattern_filter": {"type": "string", "description": "Optional filter: '2-1-2', '3-1-2', '2-2', 'inside'"},
-                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)"},
-                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)"},
-                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume (e.g., 20000000 for $20M)"}
+                    "top_n": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Number of stocks to scan (max 100)",
+                    },
+                    "pattern_filter": {
+                        "type": "string",
+                        "description": "Optional filter: '2-1-2', '3-1-2', '2-2', 'inside'",
+                    },
+                    "min_atr": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)",
+                    },
+                    "min_atr_percent": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)",
+                    },
+                    "min_dollar_volume": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum dollar volume (e.g., 20000000 for $20M)",
+                    },
                 },
-                "required": ["sector"]
-            }
+                "required": ["sector"],
+            },
         ),
         Tool(
             name="scan_etf_holdings_strat",
@@ -120,14 +141,33 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "etf": {"type": "string", "description": "ETF symbol (e.g. SPY, QQQ, IWM, XLK, XLF)"},
-                    "top_n": {"type": "integer", "default": 30, "description": "Number of top holdings to scan"},
-                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)"},
-                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)"},
-                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume (e.g., 20000000 for $20M)"}
+                    "etf": {
+                        "type": "string",
+                        "description": "ETF symbol (e.g. SPY, QQQ, IWM, XLK, XLF)",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Number of top holdings to scan",
+                    },
+                    "min_atr": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR in dollars (e.g., 2.0 for $2 minimum daily range)",
+                    },
+                    "min_atr_percent": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR as % of price (e.g., 1.5 for 1.5% minimum)",
+                    },
+                    "min_dollar_volume": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum dollar volume (e.g., 20000000 for $20M)",
+                    },
                 },
-                "required": ["etf"]
-            }
+                "required": ["etf"],
+            },
         ),
         Tool(
             name="analyze_tfc",
@@ -136,11 +176,19 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "ticker": {"type": "string", "description": "Stock symbol (e.g., AAPL, SPY)"},
-                    "include_monthly": {"type": "boolean", "default": True, "description": "Include monthly timeframe (requires more data)"},
-                    "include_weekly": {"type": "boolean", "default": True, "description": "Include weekly timeframe (requires more data)"}
+                    "include_monthly": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include monthly timeframe (requires more data)",
+                    },
+                    "include_weekly": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include weekly timeframe (requires more data)",
+                    },
                 },
-                "required": ["ticker"]
-            }
+                "required": ["ticker"],
+            },
         ),
         Tool(
             name="scan_for_tfc_alignment",
@@ -151,17 +199,42 @@ async def list_tools():
                     "tickers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of stock symbols to scan"
+                        "description": "List of stock symbols to scan",
                     },
-                    "min_score": {"type": "integer", "default": 3, "description": "Minimum TFC score (1-5, default 3 for 3/5 alignment)"},
-                    "direction": {"type": "string", "enum": ["bullish", "bearish", "any"], "default": "bullish", "description": "Filter by direction"},
-                    "include_monthly": {"type": "boolean", "default": True, "description": "Include monthly timeframe"},
-                    "min_atr": {"type": "number", "default": 0.0, "description": "Minimum ATR in dollars"},
-                    "min_atr_percent": {"type": "number", "default": 0.0, "description": "Minimum ATR as % of price"},
-                    "min_dollar_volume": {"type": "number", "default": 0.0, "description": "Minimum dollar volume"}
+                    "min_score": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "Minimum TFC score (1-5, default 3 for 3/5 alignment)",
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["bullish", "bearish", "any"],
+                        "default": "bullish",
+                        "description": "Filter by direction",
+                    },
+                    "include_monthly": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Include monthly timeframe",
+                    },
+                    "min_atr": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR in dollars",
+                    },
+                    "min_atr_percent": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum ATR as % of price",
+                    },
+                    "min_dollar_volume": {
+                        "type": "number",
+                        "default": 0.0,
+                        "description": "Minimum dollar volume",
+                    },
                 },
-                "required": ["tickers"]
-            }
+                "required": ["tickers"],
+            },
         ),
         Tool(
             name="get_multiple_quotes",
@@ -172,12 +245,12 @@ async def list_tools():
                     "tickers": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of stock symbols (max 50)"
+                        "description": "List of stock symbols (max 50)",
                     }
                 },
-                "required": ["tickers"]
-            }
-        )
+                "required": ["tickers"],
+            },
+        ),
     ]
 
 
@@ -194,7 +267,7 @@ async def call_tool(name: str, arguments: dict):
             result = await tools.analyze_strat_patterns(
                 arguments["ticker"],
                 arguments.get("timeframe", "1Day"),
-                arguments.get("days_back", 10)
+                arguments.get("days_back", 10),
             )
         elif name == "scan_sector_for_strat":
             result = await tools.scan_sector_for_strat(
@@ -203,7 +276,7 @@ async def call_tool(name: str, arguments: dict):
                 arguments.get("pattern_filter"),
                 arguments.get("min_atr", 0.0),
                 arguments.get("min_atr_percent", 0.0),
-                arguments.get("min_dollar_volume", 0.0)
+                arguments.get("min_dollar_volume", 0.0),
             )
         elif name == "scan_etf_holdings_strat":
             result = await tools.scan_etf_holdings_strat(
@@ -211,13 +284,13 @@ async def call_tool(name: str, arguments: dict):
                 arguments.get("top_n", 30),
                 arguments.get("min_atr", 0.0),
                 arguments.get("min_atr_percent", 0.0),
-                arguments.get("min_dollar_volume", 0.0)
+                arguments.get("min_dollar_volume", 0.0),
             )
         elif name == "analyze_tfc":
             result = await tools.analyze_tfc(
                 arguments["ticker"],
                 arguments.get("include_monthly", True),
-                arguments.get("include_weekly", True)
+                arguments.get("include_weekly", True),
             )
         elif name == "scan_for_tfc_alignment":
             result = await tools.scan_for_tfc_alignment(
@@ -227,7 +300,7 @@ async def call_tool(name: str, arguments: dict):
                 arguments.get("include_monthly", True),
                 arguments.get("min_atr", 0.0),
                 arguments.get("min_atr_percent", 0.0),
-                arguments.get("min_dollar_volume", 0.0)
+                arguments.get("min_dollar_volume", 0.0),
             )
         elif name == "get_multiple_quotes":
             result = await tools.get_multiple_quotes(arguments["tickers"])
@@ -237,9 +310,10 @@ async def call_tool(name: str, arguments: dict):
         print(f"[TOOL CALL] {name} completed successfully")
         return [TextContent(type="text", text=result)]
     except Exception as e:
-        error_msg = f"Error executing {name}: {str(e)}"
-        print(f"[ERROR] [TOOL CALL] {name} failed: {str(e)}")
+        error_msg = f"Error executing {name}: {e!s}"
+        print(f"[ERROR] [TOOL CALL] {name} failed: {e!s}")
         import traceback
+
         traceback.print_exc()
         return [TextContent(type="text", text=error_msg)]
 
@@ -258,45 +332,30 @@ async def handle_sse(request: Request):
     This is the main SSE endpoint that clients connect to.
     Client messages are sent to /messages endpoint via POST.
     """
-    from starlette.responses import Response, JSONResponse
-    from fastapi import HTTPException
+    from starlette.responses import JSONResponse, Response
 
     # Manually verify auth token from headers (Depends() doesn't work with SSE)
     auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth_header:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Missing authorization header"}
-        )
+        return JSONResponse(status_code=401, content={"detail": "Missing authorization header"})
 
     # Verify token
     try:
         token = auth_header.split(" ")[1] if " " in auth_header else auth_header
         await validate_token_string(token)
-        print(f"[SSE] Authentication successful")
+        print("[SSE] Authentication successful")
     except Exception as e:
-        print(f"[ERROR] [SSE] Authentication failed: {str(e)}")
-        return JSONResponse(
-            status_code=403,
-            content={"detail": f"Invalid token: {str(e)}"}
-        )
+        print(f"[ERROR] [SSE] Authentication failed: {e!s}")
+        return JSONResponse(status_code=403, content={"detail": f"Invalid token: {e!s}"})
 
-    print(f"[SSE] Connecting SSE session...")
+    print("[SSE] Connecting SSE session...")
 
     # Connect SSE session
-    async with sse_transport.connect_sse(
-        request.scope,
-        request.receive,
-        request._send
-    ) as streams:
-        print(f"[SSE] SSE session connected, starting MCP server...")
+    async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
+        print("[SSE] SSE session connected, starting MCP server...")
         # Run MCP server with the connected streams
-        await mcp_server.run(
-            streams[0],
-            streams[1],
-            mcp_server.create_initialization_options()
-        )
-        print(f"[SSE] MCP server run completed")
+        await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
+        print("[SSE] MCP server run completed")
 
     # Must return Response to avoid NoneType error
     return Response()
@@ -318,8 +377,7 @@ class AuthenticatedMessagesApp:
 
         if not auth_header:
             response = JSONResponse(
-                status_code=401,
-                content={"detail": "Missing authorization header"}
+                status_code=401, content={"detail": "Missing authorization header"}
             )
             await response(scope, receive, send)
             return
@@ -330,10 +388,7 @@ class AuthenticatedMessagesApp:
             token = auth_str.split(" ")[1] if " " in auth_str else auth_str
             await validate_token_string(token)
         except Exception as e:
-            response = JSONResponse(
-                status_code=403,
-                content={"detail": f"Invalid token: {str(e)}"}
-            )
+            response = JSONResponse(status_code=403, content={"detail": f"Invalid token: {e!s}"})
             await response(scope, receive, send)
             return
 
@@ -344,6 +399,7 @@ class AuthenticatedMessagesApp:
 # Add authenticated messages handler
 # Create single instance of the authenticated ASGI app
 auth_messages_app = AuthenticatedMessagesApp(sse_transport.handle_post_message)
+
 
 # Define ASGI wrapper that adds logging
 class LoggingMessagesApp:
@@ -362,11 +418,12 @@ class LoggingMessagesApp:
                     session_id = param.split("=", 1)[1]
                     break
 
-            print(f"[MESSAGES] Received POST /messages")
+            print("[MESSAGES] Received POST /messages")
             print(f"[MESSAGES] Session ID: {session_id}")
 
         # Delegate to actual app
         await self.app(scope, receive, send)
+
 
 # Wrap and add route - pass ASGI app directly, not as endpoint
 logging_messages_app = LoggingMessagesApp(auth_messages_app)
@@ -383,13 +440,13 @@ async def health():
         "mcp_sdk": "official",
         "features": [
             "OAuth 2.1 with PKCE",
-            "Intelligent rate limiting (180 req/min)",
+            f"Rate limiting ({settings.RATE_LIMIT_PER_MINUTE} req/min)",
             "SSE transport (official MCP SDK)",
-            "Real-time stock quotes",
+            "Tradier data provider (consolidated real-time tape)",
             "STRAT pattern detection",
             "ATR/Volume filtering",
-            "Multi-timeframe TFC analysis"
-        ]
+            "Multi-timeframe TFC analysis",
+        ],
     }
 
 
@@ -397,13 +454,16 @@ async def health():
 @app.get("/debug/config")
 async def debug_config():
     """Check if required environment variables are set"""
+    token = settings.TRADIER_API_TOKEN or ""
     return {
-        "alpaca_api_key_set": bool(settings.ALPACA_API_KEY and len(settings.ALPACA_API_KEY) > 0),
-        "alpaca_api_secret_set": bool(settings.ALPACA_API_SECRET and len(settings.ALPACA_API_SECRET) > 0),
-        "alpaca_base_url": settings.ALPACA_BASE_URL,
+        "tradier_api_token_set": bool(token),
+        "tradier_api_base_url": settings.TRADIER_API_BASE_URL,
+        "tradier_use_sandbox": settings.TRADIER_USE_SANDBOX,
+        "tradier_sandbox_token_set": bool(settings.TRADIER_SANDBOX_TOKEN),
         "jwt_secret_set": bool(settings.JWT_SECRET_KEY and len(settings.JWT_SECRET_KEY) > 0),
         "server_url": settings.SERVER_URL,
-        "api_key_prefix": settings.ALPACA_API_KEY[:4] + "..." if settings.ALPACA_API_KEY else "NOT SET"
+        "token_prefix": (token[:4] + "...") if token else "NOT SET",
+        "rate_limit_per_minute": settings.RATE_LIMIT_PER_MINUTE,
     }
 
 
@@ -421,7 +481,7 @@ async def root():
             "oauth_metadata": "/.well-known/oauth-protected-resource",
             "authorize": "/authorize",
             "token": "/token",
-            "health": "/health"
+            "health": "/health",
         },
         "tools": [
             "get_stock_quote",
@@ -430,17 +490,13 @@ async def root():
             "scan_etf_holdings_strat",
             "analyze_tfc",
             "scan_for_tfc_alignment",
-            "get_multiple_quotes"
-        ]
+            "get_multiple_quotes",
+        ],
     }
 
 
 if __name__ == "__main__":
     import os
+
     port = int(os.getenv("PORT", settings.PORT))
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info" if settings.DEBUG else "warning"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info" if settings.DEBUG else "warning")

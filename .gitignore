@@ -42,6 +42,7 @@ venv.bak/
 # Environment variables
 .env.local
 .env.*.local
+.env.test
 
 # Claude Code workspace settings
 # .claude/ is tracked (commands, settings, hooks wiring).
@@ -81,7 +82,6 @@ docs/claude.md
 
 # Local Test Scripts
 test_local.py
-test_alpaca_direct.py
 
 # Additional untracked files
 momentum_52w_detector.py
