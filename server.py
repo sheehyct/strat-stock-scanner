@@ -457,7 +457,11 @@ async def debug_config():
     token = settings.TRADIER_API_TOKEN or ""
     return {
         "tradier_api_token_set": bool(token),
-        "tradier_api_base_url": settings.TRADIER_API_BASE_URL,
+        "tradier_base_url": (
+            "https://sandbox.tradier.com/v1"
+            if settings.TRADIER_USE_SANDBOX
+            else "https://api.tradier.com/v1"
+        ),
         "tradier_use_sandbox": settings.TRADIER_USE_SANDBOX,
         "tradier_sandbox_token_set": bool(settings.TRADIER_SANDBOX_TOKEN),
         "jwt_secret_set": bool(settings.JWT_SECRET_KEY and len(settings.JWT_SECRET_KEY) > 0),

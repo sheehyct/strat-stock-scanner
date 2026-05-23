@@ -131,9 +131,8 @@ OAUTH_CLIENT_SECRET=generated_secret_from_step_3
 
 Optional overrides:
 ```bash
-TRADIER_API_BASE_URL=https://api.tradier.com/v1   # default
-TRADIER_USE_SANDBOX=false                          # future hook; v1 ships prod-only
-TRADIER_SANDBOX_TOKEN=                             # future hook
+TRADIER_USE_SANDBOX=false                          # true routes to sandbox.tradier.com
+TRADIER_SANDBOX_TOKEN=                             # required when USE_SANDBOX=true
 RATE_LIMIT_PER_MINUTE=100                          # safety margin below 60-120 cap
 MAX_CONCURRENT_REQUESTS=4
 LOG_LEVEL=INFO
@@ -178,7 +177,7 @@ python -c "import secrets; print('OAUTH_CLIENT_SECRET=' + secrets.token_urlsafe(
    - `JWT_SECRET_KEY` - Generated secret from step 1
    - `OAUTH_CLIENT_SECRET` - Generated secret from step 1
    - `OAUTH_CLIENT_ID` - `claude-mcp-client` (default)
-   - Optional: `TRADIER_API_BASE_URL`, `RATE_LIMIT_PER_MINUTE`, `LOG_LEVEL`
+   - Optional: `TRADIER_USE_SANDBOX`, `RATE_LIMIT_PER_MINUTE`, `LOG_LEVEL`
 
    Remove the previous Alpaca-era variables: `ALPACA_API_KEY`, `ALPACA_API_SECRET`,
    `ALPACA_BASE_URL`, `ALPACA_DATA_FEED`, `ALPACA_REQUESTS_PER_MINUTE`.
