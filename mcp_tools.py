@@ -135,9 +135,11 @@ async def analyze_strat_patterns(
     report += f"Metrics: {metrics}\n\n"
     for i, pattern in enumerate(patterns, 1):
         emoji = "BULLISH" if pattern.direction == "bullish" else "BEARISH"
+        confirmed_at = pattern.timestamp.split("T")[0] if "T" in pattern.timestamp else pattern.timestamp
         report += f"{i}. {emoji} **{pattern.pattern_type}**\n"
         report += f"   Direction: {pattern.direction.upper()}\n"
         report += f"   Confidence: {pattern.confidence}\n"
+        report += f"   Confirmed on: {confirmed_at}\n"
         report += f"   {pattern.description}\n"
         report += f"   Key Level: ${pattern.entry_level:.2f}\n\n"
 
@@ -899,7 +901,10 @@ async def get_multiple_quotes(tickers: list[str]) -> str:
         sym = ticker.upper()
         quote = quotes.get(sym)
         if quote:
-            results.append(f"{sym}: ${quote['ap']:.2f} (Bid: ${quote['bp']:.2f})")
+            results.append(
+                f"{sym}: ${quote['last']:.2f} "
+                f"(Bid: ${quote['bp']:.2f} / Ask: ${quote['ap']:.2f})"
+            )
         else:
             results.append(f"{sym}: No data")
     return "\n".join(results)

@@ -551,39 +551,37 @@ class STRATDetector:
     @staticmethod
     def detect_2_1_2_reversal(bars: List[Bar]) -> Optional[STRATPattern]:
         """
-        Detect 2-1-2 reversal pattern (most reliable STRAT setup)
-        Pattern: 2U/2D -> 1 -> 2U/2D (opposite direction)
+        Detect 2-1-2 reversal pattern (most reliable STRAT setup).
+        Pattern: 2U/2D -> 1 -> 2U/2D (opposite direction).
 
-        Only reports confirmed patterns where the breakout has occurred.
-        If the last bar is still Type 1, this returns None (use detect_2_1_setup instead).
+        Current-actionable only: the breakout (bar 3) MUST be the last bar in
+        the window. Stale patterns from earlier bars are not reported - a 2-1-2
+        whose breakout fired N bars ago is no longer the current setup.
         """
         if len(bars) < 3:
             return None
 
-        # Focus on the LAST 3 bars for current trading signals
-        # Check from most recent to oldest to find the nearest pattern
-        for i in range(len(bars) - 3, -1, -1):
-            bar1, bar2, bar3 = bars[i], bars[i+1], bars[i+2]
+        bar1, bar2, bar3 = bars[-3], bars[-2], bars[-1]
 
-            # Bullish 2-1-2: 2D -> 1 -> 2U (breakout must have occurred)
-            if bar1.bar_type == "2D" and bar2.bar_type == "1" and bar3.bar_type == "2U":
-                return STRATPattern(
-                    pattern_type="2-1-2 Reversal",
-                    bars=[bar1, bar2, bar3],
-                    direction="bullish",
-                    confidence="high",
-                    description=f"Bullish 2-1-2: Reversal from low ${bar1.low:.2f} through inside bar, breaking to ${bar3.high:.2f}"
-                )
+        # Bullish 2-1-2: 2D -> 1 -> 2U
+        if bar1.bar_type == "2D" and bar2.bar_type == "1" and bar3.bar_type == "2U":
+            return STRATPattern(
+                pattern_type="2-1-2 Reversal",
+                bars=[bar1, bar2, bar3],
+                direction="bullish",
+                confidence="high",
+                description=f"Bullish 2-1-2: Reversal from low ${bar1.low:.2f} through inside bar, breaking to ${bar3.high:.2f}"
+            )
 
-            # Bearish 2-1-2: 2U -> 1 -> 2D (breakout must have occurred)
-            elif bar1.bar_type == "2U" and bar2.bar_type == "1" and bar3.bar_type == "2D":
-                return STRATPattern(
-                    pattern_type="2-1-2 Reversal",
-                    bars=[bar1, bar2, bar3],
-                    direction="bearish",
-                    confidence="high",
-                    description=f"Bearish 2-1-2: Reversal from high ${bar1.high:.2f} through inside bar, breaking to ${bar3.low:.2f}"
-                )
+        # Bearish 2-1-2: 2U -> 1 -> 2D
+        if bar1.bar_type == "2U" and bar2.bar_type == "1" and bar3.bar_type == "2D":
+            return STRATPattern(
+                pattern_type="2-1-2 Reversal",
+                bars=[bar1, bar2, bar3],
+                direction="bearish",
+                confidence="high",
+                description=f"Bearish 2-1-2: Reversal from high ${bar1.high:.2f} through inside bar, breaking to ${bar3.low:.2f}"
+            )
 
         return None
 
@@ -631,38 +629,39 @@ class STRATDetector:
     @staticmethod
     def detect_3_1_2_continuation(bars: List[Bar]) -> Optional[STRATPattern]:
         """
-        Detect 3-1-2 continuation pattern
-        Pattern: 3 (directional) -> 1 (inside) -> 2 (breakout in same direction)
+        Detect 3-1-2 continuation pattern.
+        Pattern: 3 (directional) -> 1 (inside) -> 2 (breakout in same direction).
 
-        Only reports confirmed patterns where the breakout has occurred.
+        Current-actionable only: the breakout (bar 3) MUST be the last bar in
+        the window.
         """
         if len(bars) < 3:
             return None
 
-        # Check from most recent to oldest to find the nearest pattern
-        for i in range(len(bars) - 3, -1, -1):
-            bar1, bar2, bar3 = bars[i], bars[i+1], bars[i+2]
+        bar1, bar2, bar3 = bars[-3], bars[-2], bars[-1]
 
-            if bar1.bar_type == "3" and bar2.bar_type == "1":
-                # Bullish continuation: 3 up -> 1 -> 2U
-                if bar1.close > bar1.open and bar3.bar_type == "2U":
-                    return STRATPattern(
-                        pattern_type="3-1-2 Continuation",
-                        bars=[bar1, bar2, bar3],
-                        direction="bullish",
-                        confidence="high",
-                        description=f"Bullish 3-1-2: Trend continuation breaking to new high ${bar3.high:.2f}"
-                    )
+        if bar1.bar_type != "3" or bar2.bar_type != "1":
+            return None
 
-                # Bearish continuation: 3 down -> 1 -> 2D
-                elif bar1.close < bar1.open and bar3.bar_type == "2D":
-                    return STRATPattern(
-                        pattern_type="3-1-2 Continuation",
-                        bars=[bar1, bar2, bar3],
-                        direction="bearish",
-                        confidence="high",
-                        description=f"Bearish 3-1-2: Trend continuation breaking to new low ${bar3.low:.2f}"
-                    )
+        # Bullish continuation: 3 up -> 1 -> 2U
+        if bar1.close > bar1.open and bar3.bar_type == "2U":
+            return STRATPattern(
+                pattern_type="3-1-2 Continuation",
+                bars=[bar1, bar2, bar3],
+                direction="bullish",
+                confidence="high",
+                description=f"Bullish 3-1-2: Trend continuation breaking to new high ${bar3.high:.2f}"
+            )
+
+        # Bearish continuation: 3 down -> 1 -> 2D
+        if bar1.close < bar1.open and bar3.bar_type == "2D":
+            return STRATPattern(
+                pattern_type="3-1-2 Continuation",
+                bars=[bar1, bar2, bar3],
+                direction="bearish",
+                confidence="high",
+                description=f"Bearish 3-1-2: Trend continuation breaking to new low ${bar3.low:.2f}"
+            )
 
         return None
 
@@ -709,68 +708,78 @@ class STRATDetector:
     @staticmethod
     def detect_2_2_reversal(bars: List[Bar]) -> Optional[STRATPattern]:
         """
-        Detect 2-2 Reversal pattern (actionable entry signal)
-        Pattern: 2D -> 2U (bullish reversal) or 2U -> 2D (bearish reversal)
+        Detect 2-2 Reversal pattern (actionable entry signal).
+        Pattern: 2D -> 2U (bullish reversal) or 2U -> 2D (bearish reversal).
+
+        Current-actionable only: the reversal bar (bar 2) MUST be the last bar
+        in the window. A 2-2 reversal whose flip fired N bars ago is no longer
+        the current setup - by definition something else has happened since.
         """
         if len(bars) < 2:
             return None
 
-        for i in range(len(bars) - 1):
-            bar1, bar2 = bars[i], bars[i+1]
+        bar1, bar2 = bars[-2], bars[-1]
 
-            # Bullish 2-2 Reversal: 2D -> 2U
-            if bar1.bar_type == "2D" and bar2.bar_type == "2U":
-                return STRATPattern(
-                    pattern_type="2-2 Reversal",
-                    bars=[bar1, bar2],
-                    direction="bullish",
-                    confidence="medium",
-                    description=f"Bullish 2-2 Reversal: Direction change from 2D to 2U, breaking to ${bar2.high:.2f}"
-                )
+        # Bullish 2-2 Reversal: 2D -> 2U
+        if bar1.bar_type == "2D" and bar2.bar_type == "2U":
+            return STRATPattern(
+                pattern_type="2-2 Reversal",
+                bars=[bar1, bar2],
+                direction="bullish",
+                confidence="medium",
+                description=f"Bullish 2-2 Reversal: Direction change from 2D to 2U, breaking to ${bar2.high:.2f}"
+            )
 
-            # Bearish 2-2 Reversal: 2U -> 2D
-            elif bar1.bar_type == "2U" and bar2.bar_type == "2D":
-                return STRATPattern(
-                    pattern_type="2-2 Reversal",
-                    bars=[bar1, bar2],
-                    direction="bearish",
-                    confidence="medium",
-                    description=f"Bearish 2-2 Reversal: Direction change from 2U to 2D, breaking to ${bar2.low:.2f}"
-                )
+        # Bearish 2-2 Reversal: 2U -> 2D
+        if bar1.bar_type == "2U" and bar2.bar_type == "2D":
+            return STRATPattern(
+                pattern_type="2-2 Reversal",
+                bars=[bar1, bar2],
+                direction="bearish",
+                confidence="medium",
+                description=f"Bearish 2-2 Reversal: Direction change from 2U to 2D, breaking to ${bar2.low:.2f}"
+            )
 
         return None
 
     @staticmethod
     def detect_2_2_continuation(bars: List[Bar]) -> Optional[STRATPattern]:
         """
-        Detect 2-2 Continuation pattern (NOT an entry signal, for position management only)
-        Pattern: 2U -> 2U (bullish continuation) or 2D -> 2D (bearish continuation)
+        Detect 2-2 Continuation pattern.
+
+        Per methodology this is position management state, NOT a new entry
+        signal (see strat-methodology/SKILL.md: "Continuation is Deferred").
+        Excluded from scan_for_patterns default output. Function preserved
+        because future internal logic (trailing stop confirmation, exit
+        timing) may consume it.
+
+        Current-actionable only: the continuation bar (bar 2) MUST be the
+        last bar in the window.
         """
         if len(bars) < 2:
             return None
 
-        for i in range(len(bars) - 1):
-            bar1, bar2 = bars[i], bars[i+1]
+        bar1, bar2 = bars[-2], bars[-1]
 
-            # Two consecutive 2U (bullish continuation)
-            if bar1.bar_type == "2U" and bar2.bar_type == "2U":
-                return STRATPattern(
-                    pattern_type="2-2 Continuation",
-                    bars=[bar1, bar2],
-                    direction="bullish",
-                    confidence="low",
-                    description=f"Bullish 2-2 Continuation: Momentum to ${bar2.high:.2f} (not entry signal, watch for exhaustion)"
-                )
+        # Two consecutive 2U (bullish continuation)
+        if bar1.bar_type == "2U" and bar2.bar_type == "2U":
+            return STRATPattern(
+                pattern_type="2-2 Continuation",
+                bars=[bar1, bar2],
+                direction="bullish",
+                confidence="low",
+                description=f"Bullish 2-2 Continuation: Momentum to ${bar2.high:.2f} (not entry signal, watch for exhaustion)"
+            )
 
-            # Two consecutive 2D (bearish continuation)
-            elif bar1.bar_type == "2D" and bar2.bar_type == "2D":
-                return STRATPattern(
-                    pattern_type="2-2 Continuation",
-                    bars=[bar1, bar2],
-                    direction="bearish",
-                    confidence="low",
-                    description=f"Bearish 2-2 Continuation: Momentum to ${bar2.low:.2f} (not entry signal, watch for exhaustion)"
-                )
+        # Two consecutive 2D (bearish continuation)
+        if bar1.bar_type == "2D" and bar2.bar_type == "2D":
+            return STRATPattern(
+                pattern_type="2-2 Continuation",
+                bars=[bar1, bar2],
+                direction="bearish",
+                confidence="low",
+                description=f"Bearish 2-2 Continuation: Momentum to ${bar2.low:.2f} (not entry signal, watch for exhaustion)"
+            )
 
         return None
 
@@ -804,60 +813,65 @@ class STRATDetector:
     @staticmethod
     def scan_for_patterns(bars: List[Dict], timeframe: str = "1Day") -> List[STRATPattern]:
         """
-        Scan bar data for all STRAT patterns
-        Returns list of detected patterns ordered by confidence
+        Scan bar data for currently-actionable STRAT patterns.
 
-        Args:
-            bars: List of OHLCV bar dictionaries
-            timeframe: Alpaca timeframe string for forming bar detection
+        Only patterns whose confirming bar is the LAST bar in the window are
+        returned. Stale patterns (confirmed by an earlier bar in the window)
+        are filtered out, because subsequent bar action has already moved the
+        market past the original signal.
+
+        Setups (2-1, 3-1, inside bar) are reported only when no confirmed
+        pattern exists - if a confirmed pattern just fired, the setup state
+        is no longer the relevant trade context.
+
+        2-2 Continuation is intentionally not surfaced here: per methodology
+        it is position management, not a new entry signal. The detector is
+        still available for downstream code that needs it.
+
+        Sort order is confidence-desc. Recency is implicitly equal across all
+        returned patterns (they all share the same confirming bar, the last
+        bar in the window).
         """
         if len(bars) < 2:
             return []
 
         classified_bars = STRATDetector.classify_bars(bars, timeframe)
-        patterns = []
 
-        # Detect patterns in order of priority (high confidence first)
+        confirmed: List[STRATPattern] = []
 
-        # High confidence - confirmed patterns
         pattern_2_1_2 = STRATDetector.detect_2_1_2_reversal(classified_bars)
         if pattern_2_1_2:
-            patterns.append(pattern_2_1_2)
+            confirmed.append(pattern_2_1_2)
 
         pattern_3_1_2 = STRATDetector.detect_3_1_2_continuation(classified_bars)
         if pattern_3_1_2:
-            patterns.append(pattern_3_1_2)
+            confirmed.append(pattern_3_1_2)
 
-        # Medium confidence - 2-2 Reversal is an entry signal
         pattern_2_2_rev = STRATDetector.detect_2_2_reversal(classified_bars)
         if pattern_2_2_rev:
-            patterns.append(pattern_2_2_rev)
+            confirmed.append(pattern_2_2_rev)
 
-        # Low confidence - 2-2 Continuation is NOT an entry signal
-        pattern_2_2_cont = STRATDetector.detect_2_2_continuation(classified_bars)
-        if pattern_2_2_cont:
-            patterns.append(pattern_2_2_cont)
+        # Setups only if no confirmed pattern exists (per the comment that
+        # was here previously - this loop honors it now).
+        setups: List[STRATPattern] = []
+        if not confirmed:
+            setup_2_1 = STRATDetector.detect_2_1_setup(classified_bars)
+            if setup_2_1:
+                setups.append(setup_2_1)
 
-        # Setups (awaiting confirmation) - only report if no confirmed pattern
-        # 2-1 Setup (potential 2-1-2 reversal)
-        setup_2_1 = STRATDetector.detect_2_1_setup(classified_bars)
-        if setup_2_1:
-            patterns.append(setup_2_1)
+            setup_3_1 = STRATDetector.detect_3_1_setup(classified_bars)
+            if setup_3_1:
+                setups.append(setup_3_1)
 
-        # 3-1 Setup (potential 3-1-2 continuation)
-        setup_3_1 = STRATDetector.detect_3_1_setup(classified_bars)
-        if setup_3_1:
-            patterns.append(setup_3_1)
+            # Generic inside-bar setup only if no specific setup matched
+            if not setups:
+                inside_bar = STRATDetector.detect_inside_bar_setup(classified_bars)
+                if inside_bar:
+                    setups.append(inside_bar)
 
-        # Generic inside bar setup (only if no specific setups detected)
-        inside_bar = STRATDetector.detect_inside_bar_setup(classified_bars)
-        if inside_bar and not setup_2_1 and not setup_3_1:
-            patterns.append(inside_bar)
-
-        # Sort by confidence (high > medium > low)
+        patterns = confirmed + setups
         confidence_order = {"high": 3, "medium": 2, "low": 1}
         patterns.sort(key=lambda p: confidence_order[p.confidence], reverse=True)
-
         return patterns
 
 
@@ -868,14 +882,15 @@ def format_pattern_report(ticker: str, patterns: List[STRATPattern], current_pri
 
     report = f"**{ticker}** - ${current_price:.2f}\n"
 
-    # Add metrics if available
     if metrics:
         report += f"Metrics: {metrics}\n"
 
     for pattern in patterns:
         direction_label = "[BULLISH]" if pattern.direction == "bullish" else "[BEARISH]"
+        confirmed_at = pattern.timestamp.split("T")[0] if "T" in pattern.timestamp else pattern.timestamp
         report += f"{direction_label} **{pattern.pattern_type}** ({pattern.confidence} confidence)\n"
         report += f"   {pattern.description}\n"
+        report += f"   Confirmed on: {confirmed_at}\n"
         report += f"   Entry: ${pattern.entry_level:.2f}\n"
 
     return report
