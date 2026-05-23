@@ -1,5 +1,62 @@
 # MCP Server Debugging Handoff Document
 
+## Session 2026-05-21: Workflow Scaffolding Bootstrap (COMPLETE)
+
+**Date:** 2026-05-21
+**Branch:** `feat/workflow-scaffolding`
+**Status:** COMPLETE - scaffolding only, no source-code changes.
+
+### Context
+
+Scanner has been dormant since the November 2025 debugging session below.
+A separate team is concurrently doing an Alpaca-to-Tradier migration on a
+different feature branch in a different worktree. This branch was created
+solely to bring the project's session protocol and slash commands into
+line with the sister ATLAS project at `C:\Strat_Trading_Bot\vectorbt-workspace`.
+
+### What Was Accomplished
+
+- Created `feat/workflow-scaffolding` branch off `main`.
+- Rewrote `CLAUDE.md` as scanner-specific (stripped ATLAS-only sections:
+  VBT 5-step workflow, ThetaData, dashboard-design, backtesting validation;
+  kept communication standards, STRAT bar classification, entry timing,
+  strat-methodology skill, security rules, account constraints; added
+  scanner-specific sections on MCP transport integrity, data freshness,
+  Railway deployment, and a "this is NOT a trading system" disclaimer).
+- Created `.session_startup_prompt.md` documenting current mission, the
+  in-progress Tradier migration, and expected env vars.
+- Created `docs/INDEX.md` as a documentation map.
+- Created `docs/SCANNER_STATUS_BRIEF.md` as a one-page health snapshot.
+- Created `.claude/commands/` slash commands replicated from the workspace:
+  `session-start.md`, `session-end.md`, `pre-commit.md`, `test-focus.md`,
+  each adapted to the scanner's tests/, data sources, and surface area.
+- Added a `.claude/settings.json` confirming the three parent hooks
+  (safety_guard.py scope=trading, post_edit_lint.py, stop_test_gate.sh)
+  are wired correctly.
+- Updated `.gitignore` to track `.claude/` (commands and settings) while
+  still excluding `settings.local.json`, `worktrees/`, and transient state,
+  matching the workspace's pattern.
+
+### Files NOT Touched (Tradier Migration Team Owns These)
+
+- `server.py`, `alpaca_client.py`, `auth_server.py`, `auth_middleware.py`,
+  `config.py`, `mcp_tools.py`, `rate_limiter.py`, `strat_detector.py`,
+  `tools.py`, `test_alpaca_direct.py`, `test_local.py`
+- `requirements.txt`, `pyproject.toml`, `uv.lock`, `railway.json`
+- `tests/test_*.py`
+- `AGENTS.md` (already-tracked, untouched - prompt explicitly listed it
+  as ambiguous)
+
+### Next Steps
+
+1. Wait for the Tradier migration branch to merge to `main`.
+2. After merge, verify `.session_startup_prompt.md` and `SCANNER_STATUS_BRIEF.md`
+   reflect the new data provider.
+3. Smoke-test the scanner end-to-end via the mobile Claude client.
+4. Re-establish "last known healthy date" in `SCANNER_STATUS_BRIEF.md`.
+
+---
+
 ## Current Status: Connection Working, Data Retrieval Issues Remain
 
 **Last Updated:** 2025-11-17
