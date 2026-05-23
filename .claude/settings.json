@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3.12 \"C:/Strat_Trading_Bot/.claude/hooks/safety_guard.py\" --scope trading",
+            "timeout": 10,
+            "statusMessage": "Trading safety check..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3.12 \"C:/Strat_Trading_Bot/.claude/hooks/post_edit_lint.py\"",
+            "timeout": 15,
+            "statusMessage": "Running ruff lint..."
+          }
+        ]
+      }
+    ]
+  }
+}
