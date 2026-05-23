@@ -154,6 +154,12 @@ class TradierClient:
         else:
             self.base_url = "https://api.tradier.com/v1"
             token = settings.TRADIER_API_TOKEN
+        # Strip whitespace from the token. httpx/httpcore enforces RFC 7230 and
+        # raises LocalProtocolError on header values with leading or trailing
+        # whitespace. Pasting a token into a Railway / .env field can pick up
+        # a stray space or newline; defending here prevents every outbound
+        # Tradier call from failing with an opaque "Illegal header value" error.
+        token = (token or "").strip()
         if not token:
             raise RuntimeError(
                 "TRADIER_API_TOKEN (or TRADIER_SANDBOX_TOKEN when "
