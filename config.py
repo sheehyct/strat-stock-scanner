@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     OAUTH_CLIENT_SECRET: str | None = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # When False (default), client_id/redirect_uri/client_secret mismatches
+    # are logged at WARNING level but the request is still served. Lets a
+    # new validation rule ship and be observed against real claude.ai
+    # traffic before flipping to enforcement. Set to True in Railway env
+    # once the logged values match expectations.
+    STRICT_OAUTH_VALIDATION: bool = False
+    # Comma-separated allow-list of acceptable redirect_uri values. None
+    # disables the redirect_uri check entirely (the client_id check still
+    # runs). Example: "https://claude.ai/api/mcp/auth_callback".
+    OAUTH_REDIRECT_URI_ALLOWLIST: str | None = None
 
     # --- Rate Limiting Configuration ----------------------------------------
     # Tradier production endpoints are documented at 60-120 req/min/endpoint;
