@@ -16,11 +16,11 @@ live MCP tools work again. Step 7 (live validation) blocked until then.
    `https://strat-stock-scanner-production.up.railway.app` to
    `https://strat-stock-scanner-atlas-monitoring.up.railway.app`. Save.
    Railway will redeploy (no code push needed for this).
-2. **Push the local-only fix commit.** `git push origin main` lands
-   commit `86526c3 fix(server): drop stale TRADIER_API_BASE_URL
-   references` which fixes the `/debug/config` 500 error. Railway
-   will pick up this push and the SERVER_URL change in the same
-   redeploy cycle.
+2. **Push the five local commits.** `git push origin main` lands five
+   commits (one code fix, four docs updates) covering the
+   `/debug/config` 500 fix plus post-merge bug-hunt findings. Railway
+   picks them up in the same redeploy cycle as the SERVER_URL change.
+   Commit log in the "Local commits awaiting push" section below.
 3. **Re-run Step 7 live validation** from any connected Claude client
    (claude.ai web / Desktop / mobile). It should "just work" once
    OAuth discovery returns the correct URL.
@@ -66,19 +66,82 @@ old URL. `server.py:481` in the OAuth metadata endpoint hardcodes
 `settings.SERVER_URL` into the resource field. Changing the env var on
 Railway fixes the OAuth discovery output. No code change needed.
 
-### Local-only commit awaiting push
+### Local commits awaiting push
 
-`86526c3 fix(server): drop stale TRADIER_API_BASE_URL references` was
-committed to local `main` but NOT pushed (session rule: explicit
-go required for push). It fixes:
+Five commits sit on local `main` ahead of `origin/main`. Push them all
+together with `git push origin main` after the SERVER_URL fix; Railway
+redeploys automatically.
 
-- `server.py:460` `/debug/config` referenced `settings.TRADIER_API_BASE_URL`
-  which was removed earlier; endpoint returned HTTP 500. Replaced
-  with inline ternary derived from `TRADIER_USE_SANDBOX`.
-- `.env.example` and `README.md` (two refs) documented the removed
-  variable; updated to point at `TRADIER_USE_SANDBOX`.
+The four earlier commits:
 
-`git push origin main` to land it. Railway redeploys automatically.
+```
+bdf9e9f docs: rewrite DEPLOYMENT.md as Tradier-aware deployment guide
+1534eb7 docs: redact rotated Alpaca credentials from in-repo notes
+d27079e docs: update HANDOFF, status brief, startup prompt after Tradier migration
+86526c3 fix(server): drop stale TRADIER_API_BASE_URL references
+```
+
+The fifth commit is the `docs(handoff): record post-merge bug-hunt
+findings...` commit you are reading right now (run `git log
+origin/main..HEAD --oneline` for the current hash).
+
+The `86526c3` code fix addresses `/debug/config` HTTP 500 caused by a
+leftover `settings.TRADIER_API_BASE_URL` reference (removed earlier
+when sandbox routing moved to `TRADIER_USE_SANDBOX`-driven URL
+derivation). The other three are documentation updates.
+
+### Post-merge bug hunt (Codex adversarial review)
+
+A second Codex pass after merge surfaced four findings on the live `main`.
+Two are fixed in the commits above; two remain.
+
+**Addressed (in commits `1534eb7` and `bdf9e9f`):**
+
+1. Alpaca credentials still visible in `DEBUGGING_SESSION_SUMMARY.md` and
+   `HANDOFF.md`. Those keys were rotated/deleted on 2026-05-22 so risk
+   is bounded, but the strings remained at HEAD. Replaced with
+   `<redacted_rotated_2026-05-22>` in both files. (Git history retains
+   the originals; a `git filter-repo` pass is a future option.)
+2. `docs/DEPLOYMENT.md` was a 256-line Alpaca-era guide instructing new
+   users to set ALPACA_API_KEY on Railway and pointing them at the wrong
+   endpoint. Rewritten as a focused Tradier-aware guide under 150 lines.
+
+**Deferred to a follow-up PR (do NOT bundle with the morning push):**
+
+3. **MUST-FIX, but deliberately deferred: OAuth client validation is
+   missing.** `auth_server.py:109-162` accepts arbitrary `client_id` and
+   `redirect_uri` at `/authorize` without validating against
+   `settings.OAUTH_CLIENT_ID`. `/token` (lines 165-291) accepts a
+   `client_secret` form field but never compares it to
+   `settings.OAUTH_CLIENT_SECRET`. Net effect: anyone who knows the
+   server URL can mint valid JWT bearer tokens and call all MCP tools
+   (the tools downstream only check `verify_token`).
+
+   Realistic risk for this scanner is bounded (no PII, no order
+   placement, URL isn't publicized; worst case is someone using it as
+   a free Tradier proxy until rate limit hits). But it IS a real
+   open-OAuth issue and deserves a focused security PR.
+
+   Deliberately NOT fixing tonight because tightening client validation
+   simultaneously with the SERVER_URL fix would compound debugging if
+   anything broke during the OAuth flow against claude.ai's actual
+   client_id. Land the SERVER_URL fix first, confirm Step 7 validation
+   passes, then come back to this in a focused PR with proper testing
+   of the live OAuth handshake.
+
+4. Typed provider error sentinel — already on the known-deferred list
+   from the pre-merge Codex pass. `tradier_client._request` returns
+   `None` on all failures; `get_bars` collapses that to `[]`; tools
+   surface "No data available for {ticker}" even when the underlying
+   issue is an auth or rate-limit failure. Worth a focused PR but not
+   blocking.
+
+**Doc cleanup noted but not actioned:** `docs/claude.md` (lowercase) is a
+legacy November-2024 "STRAT Stock Scanner Development" doc that still
+says `Data Source: Alpaca Markets API`. `docs/INDEX.md` describes it as
+"Local Claude scratchpad (gitignored)" but it is actually tracked. Your
+call whether to delete it, replace with a stub pointing at the current
+`CLAUDE.md`, or leave alone. Left unchanged this session.
 
 ### Verified working
 
@@ -131,12 +194,14 @@ so `trade_date` will show Friday 2026-05-22 4:00 PM ET close:
   as an alias domain on Railway so old bookmarks redirect to the live
   service.
 
-### Background agent
+### Background agent — complete
 
-A `codex:codex-rescue` agent was launched at 2026-05-23T05:13Z (UTC)
-for an adversarial post-merge bug hunt. If its findings landed before
-the user opens this file, they will be summarized in a follow-up block
-below this section. If still running, check the agent task list.
+The post-merge `codex:codex-rescue` agent finished at approximately
+2026-05-23T05:27Z. Findings are summarized in the "Post-merge bug hunt"
+section above. Net: two doc-hygiene items addressed in commits
+`1534eb7` and `bdf9e9f`; the OAuth open finding is documented for a
+focused security PR after Step 7 validation; the typed-provider-error
+finding is already on the pre-merge deferred list.
 
 ---
 
