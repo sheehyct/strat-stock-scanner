@@ -1,29 +1,154 @@
 # MCP Server Debugging Handoff Document
 
-## Session 2026-05-22/23: Tradier Migration Shipped + One Blocker Pending
+## Session 2026-05-22/23: Tradier Migration Shipped (COMPLETE)
 
-**Date:** 2026-05-22 (evening) through 2026-05-23 (early morning)
+**Date:** 2026-05-22 (evening) through 2026-05-23 (morning)
 **Branches:** `feat/workflow-scaffolding` (merged via PR #3) and
-`feat/tradier-migration` (merged via PR #4); both branches now deleted.
-**Status:** Migration LIVE on Railway. One env-var fix remaining before
-live MCP tools work again. Step 7 (live validation) blocked until then.
+`feat/tradier-migration` (merged via PR #4); both branches deleted.
+**Status:** FULLY SHIPPED and live-validated against real Tradier
+production data on 2026-05-23. Scanner is operational end-to-end.
 
-### TL;DR — pick up here in the morning
+### Morning resolution (2026-05-23)
 
-1. **One Railway env-var change unblocks everything.** Open Railway
-   dashboard -> strat-stock-scanner service -> Variables -> find
-   `SERVER_URL` -> change its value from the old
-   `https://strat-stock-scanner-production.up.railway.app` to
-   `https://strat-stock-scanner-atlas-monitoring.up.railway.app`. Save.
-   Railway will redeploy (no code push needed for this).
-2. **Push the five local commits.** `git push origin main` lands five
-   commits (one code fix, four docs updates) covering the
-   `/debug/config` 500 fix plus post-merge bug-hunt findings. Railway
-   picks them up in the same redeploy cycle as the SERVER_URL change.
-   Commit log in the "Local commits awaiting push" section below.
-3. **Re-run Step 7 live validation** from any connected Claude client
-   (claude.ai web / Desktop / mobile). It should "just work" once
-   OAuth discovery returns the correct URL.
+The overnight handoff identified two blockers (Railway `SERVER_URL`
+env var pointing at the dead `production` URL, and five local commits
+awaiting push). Both resolved this morning, plus one additional bug
+was caught and fixed during validation:
+
+1. **Railway `SERVER_URL` updated** to the atlas-monitoring URL. OAuth
+   discovery at `/.well-known/oauth-protected-resource` now returns
+   the live URL; MCP clients reach the correct resource.
+2. **Local commits pushed** to origin. The overnight git push had not
+   actually reached origin (silent failure); a re-push from this
+   session landed all eight pending commits cleanly.
+3. **Trailing-whitespace token bug found and fixed.** Railway deploy
+   logs revealed `httpx.LocalProtocolError: Illegal header value
+   b'Bearer ... '` (trailing space) on every outbound Tradier call.
+   Root cause: paste-introduced whitespace in `TRADIER_API_TOKEN` on
+   Railway. Fixed two ways - user trimmed the env var (immediate
+   unblock) and commit `30158d3 fix(tradier): strip whitespace from
+   bearer token` adds defensive `.strip()` in `TradierClient.__init__`
+   so this can never bite again.
+
+### Step 7 live validation results (all passed 2026-05-23)
+
+Validated against real Tradier production data, post-market Saturday:
+
+- `get_stock_quote SPY` -> real Tradier feed, last $745.64 post-market
+- `get_stock_quote BADTICKER123` -> graceful "Quote not available"
+  message (no silent empty string)
+- `get_stock_quote BRK.B` -> $486.38 with full quote shape
+  (class-share symbol translation `BRK.B <-> BRK/B` verified
+  end-to-end through outbound + inbound paths)
+- `get_multiple_quotes [SPY, QQQ, IWM]` -> all three returned
+- `analyze_strat_patterns MU 1Day days_back=90` -> 64 trading days,
+  3 STRAT patterns, Type 1/2U/2D/3 classifications verified against
+  bar OHLCV manually (5/18 Type 3 outside, 5/19 Type 2D, 5/20-22
+  three consecutive Type 2U bars)
+- `analyze_strat_patterns MU 1Hour days_back=10` -> 56 hourly bars,
+  open-aligned bucketing produces sane Type sequence (2U, 2U, 2U,
+  2D, 2D in last 5 bars), 4 patterns detected
+- `scan_etf_holdings_strat SPY top_n=15` -> all 15 SPY top holdings
+  returned with patterns and metrics; **BRK.B at position #7** (Codex
+  finding #5 validated in production scan path, not just isolated
+  quote)
+- Rate limiting: 15 consecutive ticker fetches in one scan completed
+  clean, zero 429 errors
+- Force-failure visibility: incidentally validated by the
+  trailing-whitespace incident, which produced clean structured
+  tracebacks (`rate_limit request error url=...`,
+  `tradier request returned no response`) in Railway logs - exactly
+  the visible-failure behavior the migration was built to achieve
+
+### Codex findings final status
+
+Pre-merge review (5 MUST-FIX, 4 SHOULD-FIX, 1 NIT) plus one bonus
+parser bug caught during fixture capture:
+
+- MUST #1 UTC->ET intraday timestamps: SHIPPED, live-validated by
+  hourly STRAT analysis producing correct bar sequence
+- MUST #2 Open-aligned hourly bucketing (9:30 ET session anchor):
+  SHIPPED, live-validated on MU 1Hour analysis
+- MUST #3 `session_filter=open` on timesales: SHIPPED, intraday
+  classifications match expected typing
+- MUST #4 Sandbox URL coordination: SHIPPED, `/debug/config` returns
+  correct base URL derived from `TRADIER_USE_SANDBOX`
+- MUST #5 BRK.B class-share translation: SHIPPED, validated in both
+  direct quote and ETF scan paths
+- SHOULD #6 Remove undocumented `session_filter` from history: SHIPPED
+- NIT #10 Open-aligned hourly bucketing test: SHIPPED
+- BONUS Parser ISO 8601 format: SHIPPED, caught during live fixture
+  capture
+- SHOULD #7 Typed provider errors: DEFERRED to focused follow-up PR
+- SHOULD #8 Process-lifetime `httpx.AsyncClient`: DEFERRED (perf)
+- SHOULD #9 Rate limiter semaphore retry: DEFERRED (concurrency edge)
+
+Post-merge bug-hunt review (4 findings):
+
+- Alpaca creds in repo docs: FIXED in `1534eb7` (redacted)
+- Stale DEPLOYMENT.md instructions: FIXED in `bdf9e9f` (rewritten
+  as Tradier-aware)
+- `/debug/config` HTTP 500 from leftover `TRADIER_API_BASE_URL`:
+  FIXED in `86526c3`
+- OAuth client_id / client_secret / redirect_uri validation gap:
+  DEFERRED to focused security PR (see Follow-ups below)
+
+### Final commit log on `main` (in chronological order top->down means
+newest commits first)
+
+```
+30158d3 fix(tradier): strip whitespace from bearer token
+ed31d6d docs(handoff): record post-merge bug-hunt findings + commit log
+bdf9e9f docs: rewrite DEPLOYMENT.md as Tradier-aware deployment guide
+1534eb7 docs: redact rotated Alpaca credentials from in-repo notes
+d27079e docs: update HANDOFF, status brief, startup prompt
+86526c3 fix(server): drop stale TRADIER_API_BASE_URL references
+31a71aa feat: migrate equity data provider from Alpaca to Tradier (#4)
+fcadeaa chore: workflow scaffolding for scanner (#3)
+```
+
+### Follow-ups queued for future sessions
+
+Filed for separate focused PRs. None blocking; scanner is fully
+operational without them:
+
+1. **OAuth security PR** (HIGH severity, bounded realistic risk):
+   `auth_server.py:109-291` accepts arbitrary `client_id`,
+   `redirect_uri`, and `client_secret` without validating against
+   `settings.OAUTH_*`. Anyone with the server URL can mint valid JWT
+   bearer tokens. Tighten in a focused PR; test against the live
+   claude.ai OAuth client_id to ensure validation does not break the
+   integration.
+
+2. **Typed provider errors PR**: `_request` returns `None` for every
+   failure mode (auth, rate limit, network, no-data). `mcp_tools.py`
+   surfaces "No data available" or empty patterns regardless. Add a
+   typed sentinel with category so callers can distinguish "not
+   found" from "upstream error". The BADTICKER response wording
+   "symbol unknown or upstream error" is the user-visible symptom.
+
+3. **Architecture / perf PR**: process-lifetime
+   `httpx.AsyncClient` (currently instantiated per request);
+   rate-limiter releases semaphore before retry backoff (currently
+   holds during sleeps).
+
+4. **Doc cleanup**: `docs/claude.md` (lowercase) is a legacy
+   November-2024 file still saying `Data Source: Alpaca Markets API`.
+   `docs/INDEX.md` describes it as "gitignored" but it is actually
+   tracked. Delete it, replace with a stub, or update - user's call.
+
+5. **Pre-existing test orphan**: `test_integration.py::test_strat_pattern_detection`
+   uses a 3-bar fixture that cannot form a 2-1-2 (classifier hardcodes
+   first bar to Type 3). See the `project-test-strat-pattern-detection-orphan`
+   memory. Replace with a proper 4+ bar fixture in a focused commit.
+
+---
+
+## Historical detail from overnight (preserved for archaeology)
+
+The sections below are the original overnight handoff content,
+preserved as the timeline record of how the migration was prepared,
+reviewed, and shipped.
 
 ### What shipped tonight
 

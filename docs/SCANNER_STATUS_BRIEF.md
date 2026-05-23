@@ -36,26 +36,26 @@ integrations to the atlas-monitoring URL.
 
 ## Last Known Healthy Date
 
-`2026-05-23` - code level. The Tradier migration deployed cleanly to
-Railway; `/health` returns 200 with the new Tradier-flavored response.
-**MCP integration flow is currently blocked** until the `SERVER_URL`
-Railway env var is updated to the atlas-monitoring URL (see Current
-Blockers below). Live tool validation against TradingView is pending
-that fix.
+`2026-05-23` - fully validated end-to-end with live Tradier production
+data. Step 7 checklist completed: real quote, batch quote, class-share
+symbol (BRK.B), daily STRAT analysis (64 bars), hourly STRAT analysis
+(open-aligned aggregator), ETF holdings scan (15 stocks including
+BRK.B at position #7), rate limiting clean (15 consecutive ticker
+fetches, zero 429s). See `../HANDOFF.md` top entry for the full
+validation results.
 
 ## Current Blockers
 
-1. **`SERVER_URL` env var on Railway still points at the old production
-   URL.** This breaks OAuth discovery — every MCP client gets pointed
-   at the dead URL and the auth flow fails. Fix: Railway dashboard ->
-   strat-stock-scanner -> Variables -> update `SERVER_URL` to
-   `https://strat-stock-scanner-atlas-monitoring.up.railway.app`.
-   Railway will redeploy automatically.
+None. Scanner is operational. Follow-up PRs queued for future sessions:
 
-2. **One local-only fix commit (`86526c3`) not yet pushed.** Fixes
-   `/debug/config` HTTP 500 caused by a stale `TRADIER_API_BASE_URL`
-   reference. `git push origin main` after the SERVER_URL fix to land
-   in the same redeploy cycle.
+1. **OAuth client validation** (security; bounded risk for personal
+   use) - `auth_server.py:109-291` accepts arbitrary `client_id` /
+   `client_secret` / `redirect_uri` without validation. Tighten in a
+   focused PR.
+2. **Typed provider errors** - distinguish "symbol unknown" from
+   "auth/rate-limit failure" at tool-response level.
+3. **Architecture/perf** - process-lifetime httpx.AsyncClient;
+   rate-limiter releases semaphore before retry backoff.
 
 ## Tools Exposed via MCP
 
