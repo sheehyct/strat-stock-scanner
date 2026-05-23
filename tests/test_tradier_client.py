@@ -62,15 +62,15 @@ def test_normalize_quote_internal_shape():
     for key in ("bp", "bs", "ap", "as", "t", "last", "symbol"):
         assert key in normalized, f"normalized quote missing key {key!r}"
 
-    assert normalized["bp"] == pytest.approx(189.41)
-    assert normalized["ap"] == pytest.approx(189.45)
-    assert normalized["bs"] == 2
-    assert normalized["as"] == 1
-    assert normalized["last"] == pytest.approx(189.43)
+    assert normalized["bp"] == pytest.approx(308.5)
+    assert normalized["ap"] == pytest.approx(308.6)
+    assert normalized["bs"] == 1040
+    assert normalized["as"] == 80
+    assert normalized["last"] == pytest.approx(308.82)
     assert normalized["symbol"] == "AAPL"
 
-    # trade_date 1716296399000 = 2024-05-21T13:00 UTC
-    assert normalized["t"].startswith("2024-05-21T")
+    # trade_date 1779480000301 = 2026-05-22T20:00:00 UTC (16:00 ET session close)
+    assert normalized["t"].startswith("2026-05-22T")
     assert normalized["t"].endswith("Z")
 
 
@@ -106,11 +106,11 @@ def test_normalize_history_day_internal_shape():
     for key in ("t", "o", "h", "l", "c", "v"):
         assert key in bar, f"normalized bar missing key {key!r}"
 
-    assert bar["o"] == pytest.approx(184.50)
-    assert bar["h"] == pytest.approx(186.60)
-    assert bar["l"] == pytest.approx(184.10)
+    assert bar["o"] == pytest.approx(185.435)
+    assert bar["h"] == pytest.approx(187.1)
+    assert bar["l"] == pytest.approx(184.62)
     assert bar["c"] == pytest.approx(186.28)
-    assert bar["v"] == 50101010
+    assert bar["v"] == 72044809
 
     # Timestamp should be UTC ISO from the 2024-05-13 16:00 ET anchor.
     # During DST that's 20:00 UTC. The exact hour can shift around DST cuts;
@@ -126,7 +126,10 @@ def test_extract_timesales_list_shape():
     body = _load("timesales_15min.json")
     bars = TradierClient._extract_timesales(body)
     assert len(bars) == 8
-    assert bars[0]["time"] == "2024-05-17 09:30"
+    # Tradier returns ISO 8601 with 'T' separator and seconds, e.g.
+    # "2026-05-21T09:30:00". The normalizer (_normalize_intraday_timestamp)
+    # converts to UTC ISO; extract preserves the raw shape.
+    assert bars[0]["time"] == "2026-05-21T09:30:00"
 
 
 def test_normalize_timesales_bar_internal_shape():
@@ -136,18 +139,17 @@ def test_normalize_timesales_bar_internal_shape():
 
     for key in ("t", "o", "h", "l", "c", "v"):
         assert key in bar
-    assert bar["o"] == pytest.approx(189.10)
-    assert bar["h"] == pytest.approx(189.45)
-    assert bar["l"] == pytest.approx(188.95)
-    assert bar["c"] == pytest.approx(189.30)
-    assert bar["v"] == 1000010
-    # 2024-05-17 09:30 ET => 13:30 UTC (EDT, UTC-4)
-    assert bar["t"].startswith("2024-05-17T")
-    assert bar["t"].endswith("Z")
+    assert bar["o"] == pytest.approx(301.03)
+    assert bar["h"] == pytest.approx(302.47)
+    assert bar["l"] == pytest.approx(300.4)
+    assert bar["c"] == pytest.approx(301.84)
+    assert bar["v"] == 2239603
+    # 2026-05-21 09:30 ET => 13:30 UTC (EDT, UTC-4)
+    assert bar["t"] == "2026-05-21T13:30:00Z"
 
 
 def test_hourly_aggregation_session_open_aligned():
-    """8x 15min bars from 2024-05-17 09:30-11:15 ET roll up to exactly two
+    """8x 15min AAPL bars from 2026-05-21 09:30-11:15 ET roll up to exactly two
     1H buckets aligned to the 9:30 ET session open, not UTC hour boundaries.
     Bucket 1: 09:30-10:30 ET (4 sub-bars); Bucket 2: 10:30-11:30 ET (4 sub-bars).
     During EDT (UTC-4) the bucket open times in UTC are 13:30 and 14:30."""
@@ -161,22 +163,22 @@ def test_hourly_aggregation_session_open_aligned():
 
     # Bucket keys are open-aligned (:30:00Z), not UTC-hour aligned. The
     # previous UTC-bucket implementation would have emitted :00:00Z keys.
-    assert hourly[0]["t"] == "2024-05-17T13:30:00Z"
-    assert hourly[1]["t"] == "2024-05-17T14:30:00Z"
+    assert hourly[0]["t"] == "2026-05-21T13:30:00Z"
+    assert hourly[1]["t"] == "2026-05-21T14:30:00Z"
 
     # Bucket 1 (9:30-10:30 ET) = 9:30, 9:45, 10:00, 10:15 sub-bars.
-    assert hourly[0]["o"] == pytest.approx(189.10)
-    assert hourly[0]["h"] == pytest.approx(189.95)
-    assert hourly[0]["l"] == pytest.approx(188.95)
-    assert hourly[0]["c"] == pytest.approx(189.62)
-    assert hourly[0]["v"] == 1000010 + 850020 + 760030 + 700040
+    assert hourly[0]["o"] == pytest.approx(301.03)
+    assert hourly[0]["h"] == pytest.approx(303.07)
+    assert hourly[0]["l"] == pytest.approx(300.4)
+    assert hourly[0]["c"] == pytest.approx(301.93)
+    assert hourly[0]["v"] == 2239603 + 1152953 + 988800 + 1006204
 
     # Bucket 2 (10:30-11:30 ET) = 10:30, 10:45, 11:00, 11:15 sub-bars.
-    assert hourly[1]["o"] == pytest.approx(189.62)
-    assert hourly[1]["h"] == pytest.approx(189.95)
-    assert hourly[1]["l"] == pytest.approx(189.20)
-    assert hourly[1]["c"] == pytest.approx(189.78)
-    assert hourly[1]["v"] == 650050 + 540060 + 590070 + 510080
+    assert hourly[1]["o"] == pytest.approx(301.93)
+    assert hourly[1]["h"] == pytest.approx(303.36)
+    assert hourly[1]["l"] == pytest.approx(301.5801)
+    assert hourly[1]["c"] == pytest.approx(303.02)
+    assert hourly[1]["v"] == 720557 + 556288 + 703173 + 1201398
 
 
 # --- Fault payload handling --------------------------------------------------

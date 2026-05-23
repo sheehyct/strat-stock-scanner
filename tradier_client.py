@@ -102,13 +102,17 @@ def _date_to_session_close_utc(date_str: str) -> str:
 
 
 def _normalize_intraday_timestamp(ts_str: str) -> str:
-    """Tradier timesales returns 'YYYY-MM-DD HH:MM' in ET. Convert to UTC ISO."""
+    """Tradier timesales returns intraday timestamps in ET, typically as
+    'YYYY-MM-DDTHH:MM:SS' (ISO 8601) and occasionally as 'YYYY-MM-DD HH:MM'
+    on older response shapes. fromisoformat handles every separator + the
+    optional seconds suffix since Python 3.11. Convert to UTC ISO with Z."""
     try:
-        dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M")
-        dt = _ET.localize(dt)
-        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
+        dt = datetime.fromisoformat(ts_str)
+    except ValueError:
         return ts_str
+    if dt.tzinfo is None:
+        dt = _ET.localize(dt)
+    return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _date_param(dt: datetime, granular: bool = False) -> str:
