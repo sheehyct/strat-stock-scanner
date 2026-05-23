@@ -1,0 +1,8 @@
+{
+  "fault": {
+    "faultstring": "Invalid Access Token",
+    "detail": {
+      "errorcode": "keymanagement.service.invalid_access_token"
+    }
+  }
+}

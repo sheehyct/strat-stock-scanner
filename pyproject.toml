@@ -1,7 +1,7 @@
 [project]
 name = "strat-stock-scanner"
 version = "0.1.0"
-description = "Mobile stock scanner using STRAT methodology and Alpaca API"
+description = "Mobile stock scanner using STRAT methodology backed by the Tradier Market Data API"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",

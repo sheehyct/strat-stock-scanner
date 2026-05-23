@@ -6,12 +6,12 @@ Production-ready MCP server providing systematic technical analysis using Rob Sm
 
 Remote MCP server enabling real-time stock analysis using the STRAT methodology. Deploy once to Railway and access from Claude Desktop or mobile anywhere with an internet connection. Designed for traders requiring mobile-accessible pattern detection and multi-timeframe analysis.
 
-**Version:** 2.1.0 - Multi-timeframe continuity analysis with corrected bar classification
+**Version:** 3.0.0 - Tradier data provider migration. Pure provider swap; STRAT logic and tool contracts unchanged.
 
 ## Features
 
 ### Core Features
-- Real-time stock quotes via Alpaca API
+- Real-time consolidated-tape stock quotes via the Tradier Market Data API
 - STRAT pattern detection (2-1-2, 3-1-2, 2-2, Rev Strats)
 - Timeframe Continuity (TFC) analysis across 5 timeframes (monthly, weekly, daily, 60min, 15min)
 - Multi-timeframe alignment scoring (0-5 scale with quality grades)
@@ -21,13 +21,13 @@ Remote MCP server enabling real-time stock analysis using the STRAT methodology.
 - Bulk quote lookups (up to 50 stocks)
 - Mobile-accessible via Claude MCP connector
 
-### Production Features (v2.0)
+### Production Features
 - OAuth 2.1 authentication with PKCE (MCP spec-compliant)
-- Intelligent rate limiting (180 requests/minute, safely under Alpaca's 200 limit)
-- Exponential backoff on rate limit errors
-- Concurrent request limiting (max 3 simultaneous)
-- Automatic retry logic with configurable attempts
-- Comprehensive error handling
+- Rate limiting (default 100 req/min, safely under Tradier's 60-120 req/min/endpoint cap)
+- Exponential backoff on 429 errors with bounded retry budget
+- Concurrent request cap via asyncio semaphore
+- Structured per-request logging (endpoint, symbol, status, latency, request id)
+- logger.exception() on every error path so Railway logs surface failures
 
 ## STRAT Patterns Detected
 
@@ -67,7 +67,7 @@ strat-stock-scanner/
 ├── auth_server.py         # OAuth 2.1 authorization server
 ├── auth_middleware.py     # JWT token validation
 ├── rate_limiter.py        # Intelligent rate limiting
-├── alpaca_client.py       # Alpaca API wrapper with rate limiting
+├── tradier_client.py      # Tradier API wrapper with rate limiting and normalization
 ├── mcp_tools.py           # MCP tool definitions
 ├── strat_detector.py      # STRAT pattern detection engine
 ├── requirements.txt       # Python dependencies
@@ -94,7 +94,7 @@ strat-stock-scanner/
 
 - Python 3.10+
 - UV package manager
-- Alpaca Markets account (paper or live)
+- Tradier brokerage account with a production Market Data API token
 - Railway account (for deployment)
 
 ### Local Development
@@ -124,10 +124,19 @@ cp .env.example .env
 
 Required environment variables:
 ```bash
-ALPACA_API_KEY=your_alpaca_api_key
-ALPACA_API_SECRET=your_alpaca_api_secret
+TRADIER_API_TOKEN=your_tradier_production_token
 JWT_SECRET_KEY=generated_secret_from_step_3
 OAUTH_CLIENT_SECRET=generated_secret_from_step_3
+```
+
+Optional overrides:
+```bash
+TRADIER_API_BASE_URL=https://api.tradier.com/v1   # default
+TRADIER_USE_SANDBOX=false                          # future hook; v1 ships prod-only
+TRADIER_SANDBOX_TOKEN=                             # future hook
+RATE_LIMIT_PER_MINUTE=100                          # safety margin below 60-120 cap
+MAX_CONCURRENT_REQUESTS=4
+LOG_LEVEL=INFO
 ```
 
 5. **Run the server**
@@ -165,11 +174,14 @@ python -c "import secrets; print('OAUTH_CLIENT_SECRET=' + secrets.token_urlsafe(
 3. **Connect to Railway** and create new project
 
 4. **Add environment variables in Railway dashboard:**
-   - `ALPACA_API_KEY` - Your Alpaca API key
-   - `ALPACA_API_SECRET` - Your Alpaca API secret
+   - `TRADIER_API_TOKEN` - Your Tradier production Market Data token
    - `JWT_SECRET_KEY` - Generated secret from step 1
    - `OAUTH_CLIENT_SECRET` - Generated secret from step 1
    - `OAUTH_CLIENT_ID` - `claude-mcp-client` (default)
+   - Optional: `TRADIER_API_BASE_URL`, `RATE_LIMIT_PER_MINUTE`, `LOG_LEVEL`
+
+   Remove the previous Alpaca-era variables: `ALPACA_API_KEY`, `ALPACA_API_SECRET`,
+   `ALPACA_BASE_URL`, `ALPACA_DATA_FEED`, `ALPACA_REQUESTS_PER_MINUTE`.
 
 5. **Deploy automatically** - Railway builds and deploys from GitHub
 
@@ -188,7 +200,7 @@ curl https://your-app.up.railway.app/.well-known/oauth-protected-resource
 1. Go to https://claude.ai → Settings → Connectors
 
 2. Add custom connector:
-   - **Name:** Alpaca STRAT Scanner
+   - **Name:** STRAT Scanner
    - **URL:** `https://your-app.up.railway.app/mcp`
 
 3. **Complete OAuth flow:**
@@ -362,13 +374,12 @@ Bulk quote lookup (up to 50 stocks).
 
 ### Data Source
 
-- **Alpaca Markets API** (paper or live account)
-- **IEX Feed:** Free tier (15-min delay)
-- **SIP Feed:** Paid subscription (real-time)
-- **Rate Limit:** 200 requests/minute (paper trading)
-- **Our Limit:** 180 requests/minute (safety buffer)
-- **Concurrent Requests:** Max 3 simultaneous
-- **Retry Logic:** Exponential backoff on errors
+- **Tradier Market Data API** (consolidated tape, real-time)
+- **Endpoints used:** `/markets/quotes`, `/markets/history`, `/markets/timesales`, `/markets/clock`
+- **Rate Limit:** Tradier production cap is 60-120 req/min/endpoint (rolling 1-minute window)
+- **Our Limit:** 100 requests/minute (safety buffer; tunable via `RATE_LIMIT_PER_MINUTE`)
+- **Concurrent Requests:** Max 4 simultaneous (tunable via `MAX_CONCURRENT_REQUESTS`)
+- **Retry Logic:** One retry with exponential backoff on 429, then bubble up
 
 ### Cost Breakdown
 
@@ -378,12 +389,12 @@ Bulk quote lookup (up to 50 stocks).
 - Unlimited requests at typical usage
 - First $5 free credit included
 
-**Alpaca API:** Free (paper trading)
-- 200 requests/minute
-- Real-time quotes (with subscription)
-- Historical data access
+**Tradier Market Data API:** Free with an existing Tradier brokerage account
+- Real-time consolidated-tape quotes
+- Historical bars (daily/weekly/monthly)
+- Intraday timesales (1min / 5min / 15min)
 
-**Total Monthly Cost:** $5-8
+**Total Monthly Cost:** $5
 
 ## Development
 
@@ -392,7 +403,7 @@ Bulk quote lookup (up to 50 stocks).
 1. Research pattern in `.claude/skills/strat-methodology/PATTERNS.md`
 2. Implement detection in `strat_detector.py`
 3. Test with known examples
-4. Validate with live Alpaca data
+4. Validate with live Tradier data
 
 See `docs/claude.md` for development guidelines.
 
@@ -404,7 +415,7 @@ See `docs/claude.md` for development guidelines.
 uv run python test_local.py
 
 # This will test:
-# - Alpaca API connection
+# - Tradier API connection
 # - Historical bar retrieval
 # - STRAT pattern detection
 # - Rate limiter with 10 concurrent requests
@@ -450,10 +461,10 @@ npx @modelcontextprotocol/inspector uv run python server.py
 
 ### Rate Limiting
 
-- Automatically stays under Alpaca's 200 req/min limit
-- Safe to scan 100+ stocks without hitting rate limits
-- Exponential backoff on 429 rate limit errors
-- Maximum 3 concurrent requests to prevent overload
+- Automatically stays under Tradier's 60-120 req/min/endpoint cap
+- For >10-symbol scans, uses `POST /markets/quotes` to batch in a single API call
+- Exponential backoff on 429 rate limit errors (one retry, then bubble up)
+- Maximum 4 concurrent requests to prevent overload
 - Progress logging for large scans
 
 ## Contributing
