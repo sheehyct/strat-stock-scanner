@@ -10,7 +10,7 @@ you need to know "is it up, what's it talking to, is it broken."
 
 | Field | Value |
 |-------|-------|
-| MCP Server URL | `https://strat-stock-scanner-production.up.railway.app` |
+| MCP Server URL | `https://strat-stock-scanner-atlas-monitoring.up.railway.app` |
 | Platform | Railway |
 | Health Endpoint | `/health` |
 | OAuth Metadata | `/.well-known/oauth-protected-resource` |
@@ -18,28 +18,44 @@ you need to know "is it up, what's it talking to, is it broken."
 | Message Endpoint | `POST /messages` |
 | Auto-Deploy | Yes - `git push origin main` triggers Railway redeploy |
 
+Note: the older URL `https://strat-stock-scanner-production.up.railway.app`
+is a Railway fallback corpse (no container backing it); requests there
+return HTTP 502 with `X-Railway-Fallback: true`. Update any bookmarks /
+integrations to the atlas-monitoring URL.
+
 ## Data Provider
 
 | Field | Value |
 |-------|-------|
-| Current Provider | Alpaca SIP feed (legacy) |
-| Migration Target | Tradier (in progress on separate feature branch) |
+| Current Provider | Tradier Market Data REST API |
+| Auth | Single bearer token (`TRADIER_API_TOKEN`) |
+| Endpoints used | `/markets/quotes`, `/markets/history`, `/markets/timesales`, `/markets/clock` |
 | Timezone | `America/New_York` (mandatory on all fetches) |
 | Holiday Filter | Not yet wired - add `pandas_market_calendars` when needed |
+| Migration history | Migrated from Alpaca SIP feed on 2026-05-23 (PR #4) |
 
 ## Last Known Healthy Date
 
-`2025-11-17` per `../HANDOFF.md`. Status since then is uncertain; the scanner
-has been dormant pending the Tradier migration.
+`2026-05-23` - code level. The Tradier migration deployed cleanly to
+Railway; `/health` returns 200 with the new Tradier-flavored response.
+**MCP integration flow is currently blocked** until the `SERVER_URL`
+Railway env var is updated to the atlas-monitoring URL (see Current
+Blockers below). Live tool validation against TradingView is pending
+that fix.
 
 ## Current Blockers
 
-1. Alpaca credentials may have rotated since November 2025 - verify before
-   declaring the scanner "broken."
-2. Tradier migration on separate branch must land before the scanner can
-   resume normal use.
-3. MCP-over-SSE transport had a 307 redirect issue on `/messages` as of
-   the last debugging session; verify it has not regressed.
+1. **`SERVER_URL` env var on Railway still points at the old production
+   URL.** This breaks OAuth discovery — every MCP client gets pointed
+   at the dead URL and the auth flow fails. Fix: Railway dashboard ->
+   strat-stock-scanner -> Variables -> update `SERVER_URL` to
+   `https://strat-stock-scanner-atlas-monitoring.up.railway.app`.
+   Railway will redeploy automatically.
+
+2. **One local-only fix commit (`86526c3`) not yet pushed.** Fixes
+   `/debug/config` HTTP 500 caused by a stale `TRADIER_API_BASE_URL`
+   reference. `git push origin main` after the SERVER_URL fix to land
+   in the same redeploy cycle.
 
 ## Tools Exposed via MCP
 
@@ -63,17 +79,21 @@ has been dormant pending the Tradier migration.
 
 ## Rate Limiting
 
-- 180 requests/minute soft cap (under Alpaca's 200/min limit)
-- Max 3 concurrent in-flight requests
-- Exponential backoff on 429
+- 100 requests/minute soft cap (Tradier production caps endpoints at
+  60-120/min depending on endpoint; we cap conservatively below the
+  lower bound for safety margin)
+- Max 4 concurrent in-flight requests (`MAX_CONCURRENT_REQUESTS`)
+- Exponential backoff on 429 (up to 2 retries with 1s and 2s waits)
 
 ## How to Verify Health Quickly
 
 ```bash
-curl -i https://strat-stock-scanner-production.up.railway.app/health
+curl -i https://strat-stock-scanner-atlas-monitoring.up.railway.app/health
 ```
 
-Expect HTTP 200. If anything else, check Railway logs:
+Expect HTTP 200 with `version: 3.0.0` and a `features` array that lists
+`Tradier data provider (consolidated real-time tape)`. If anything else,
+check Railway Deploy Logs:
 
 ```bash
 railway logs
@@ -81,5 +101,5 @@ railway logs
 
 ## Last Updated
 
-`2026-05-21` - workflow scaffolding bootstrap. Update this section when the
-brief changes.
+`2026-05-23` - Tradier migration shipped (PR #3 + PR #4 merged to main).
+Update this section when the brief changes.

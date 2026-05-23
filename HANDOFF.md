@@ -1,5 +1,145 @@
 # MCP Server Debugging Handoff Document
 
+## Session 2026-05-22/23: Tradier Migration Shipped + One Blocker Pending
+
+**Date:** 2026-05-22 (evening) through 2026-05-23 (early morning)
+**Branches:** `feat/workflow-scaffolding` (merged via PR #3) and
+`feat/tradier-migration` (merged via PR #4); both branches now deleted.
+**Status:** Migration LIVE on Railway. One env-var fix remaining before
+live MCP tools work again. Step 7 (live validation) blocked until then.
+
+### TL;DR — pick up here in the morning
+
+1. **One Railway env-var change unblocks everything.** Open Railway
+   dashboard -> strat-stock-scanner service -> Variables -> find
+   `SERVER_URL` -> change its value from the old
+   `https://strat-stock-scanner-production.up.railway.app` to
+   `https://strat-stock-scanner-atlas-monitoring.up.railway.app`. Save.
+   Railway will redeploy (no code push needed for this).
+2. **Push the local-only fix commit.** `git push origin main` lands
+   commit `86526c3 fix(server): drop stale TRADIER_API_BASE_URL
+   references` which fixes the `/debug/config` 500 error. Railway
+   will pick up this push and the SERVER_URL change in the same
+   redeploy cycle.
+3. **Re-run Step 7 live validation** from any connected Claude client
+   (claude.ai web / Desktop / mobile). It should "just work" once
+   OAuth discovery returns the correct URL.
+
+### What shipped tonight
+
+- PR #3 `feat/workflow-scaffolding` merged via `gh pr merge 3 --squash`
+  at 2026-05-23T01:43:08Z. Squash commit `fcadeaa` on `main`.
+- PR #4 `feat/tradier-migration` merged via `gh pr merge 4 --squash`
+  at 2026-05-23T01:47:27Z. Squash commit `31a71aa` on `main`.
+- Railway auto-deployed both. Build clean, container started,
+  `/health` returns 200 with Tradier-flavored response shape.
+- Pre-merge work completed: 10 distinct fixes addressing 5 MUST-FIX,
+  1 SHOULD-FIX, 1 NIT from the Codex adversarial review (see PR #4
+  body for the punch list). Plus one bonus parser-correctness fix
+  caught during live fixture capture (Tradier returns ISO 8601 with
+  `T` separator, not the space-separated form the placeholder
+  fixtures used).
+- Six of seven test fixtures replaced with byte-faithful live Tradier
+  captures (AAPL, SPY/QQQ/IWM). `fault_auth.json` remains synthetic
+  because real Tradier returns plain-text 401 for invalid bearer
+  tokens, not the documented JSON `{"fault": ...}` shape.
+
+### The blocker — Railway `SERVER_URL` env var
+
+OAuth discovery at
+`https://strat-stock-scanner-atlas-monitoring.up.railway.app/.well-known/oauth-protected-resource`
+returns:
+
+```
+"resource": "https://strat-stock-scanner-production.up.railway.app"
+"authorization_servers": ["https://strat-stock-scanner-production.up.railway.app"]
+```
+
+Every MCP client (claude.ai, mobile, Claude Code) reads this discovery
+endpoint and follows the resource URL for OAuth + SSE. They get pointed
+at the dead `production` URL, which returns Railway's 502 fallback page
+(`X-Railway-Fallback: true`). The OAuth handshake fails; the tools
+"connect" momentarily then immediately drop with no usable session.
+
+Root cause: `settings.SERVER_URL` (read from Railway env) is still the
+old URL. `server.py:481` in the OAuth metadata endpoint hardcodes
+`settings.SERVER_URL` into the resource field. Changing the env var on
+Railway fixes the OAuth discovery output. No code change needed.
+
+### Local-only commit awaiting push
+
+`86526c3 fix(server): drop stale TRADIER_API_BASE_URL references` was
+committed to local `main` but NOT pushed (session rule: explicit
+go required for push). It fixes:
+
+- `server.py:460` `/debug/config` referenced `settings.TRADIER_API_BASE_URL`
+  which was removed earlier; endpoint returned HTTP 500. Replaced
+  with inline ternary derived from `TRADIER_USE_SANDBOX`.
+- `.env.example` and `README.md` (two refs) documented the removed
+  variable; updated to point at `TRADIER_USE_SANDBOX`.
+
+`git push origin main` to land it. Railway redeploys automatically.
+
+### Verified working
+
+- `curl https://strat-stock-scanner-atlas-monitoring.up.railway.app/health`
+  returns 200 with the new Tradier-flavored body and `version: 3.0.0`.
+- Local `pytest tests/test_auth.py tests/test_tradier_client.py` -> 16/16
+  pass on the post-merge `main` (with the local `86526c3` applied).
+- Full test suite -> 20 passed, 3 skipped, 1 known-pre-existing failure
+  (`test_integration.py::test_strat_pattern_detection`, orphan 3-bar
+  fixture that cannot produce a 2-1-2 pattern; documented in
+  `project-test-strat-pattern-detection-orphan` memory; deferred).
+
+### Known-deferred (do NOT fold into morning fix)
+
+- Typed provider error class so call sites can distinguish "no data"
+  from auth / vendor failure (SHOULD-FIX from Codex review).
+- Process-lifetime `httpx.AsyncClient` instead of per-request
+  instantiation (SHOULD-FIX, perf only).
+- Release rate-limiter semaphore slot before retry backoff (SHOULD-FIX,
+  concurrency edge case).
+- `test_strat_pattern_detection` orphan fixture (pre-existing).
+
+### Step 7 live validation checklist (do AFTER the SERVER_URL fix)
+
+Run each via the now-working MCP integration. Markets are closed Sat/Sun
+so `trade_date` will show Friday 2026-05-22 4:00 PM ET close:
+
+1. `get_stock_quote MU` -> returns last regular-hours trade
+2. `get_stock_quote BADTICKER123` -> graceful not-found, no silent
+   empty string
+3. `get_stock_quote BRK.B` -> works (validates BRK.B -> BRK/B symbol
+   translation)
+4. `get_multiple_quotes [SPY, QQQ, IWM]` -> all three return
+5. `analyze_strat_patterns MU` (1Day, days_back=90) -> 60+ trading
+   days with 1/2U/2D/3 typing
+6. `analyze_strat_patterns MU` (1Hour, days_back=10) -> open-aligned
+   hourly buckets (verify against TradingView 1H chart for one symbol)
+7. `scan_etf_holdings_strat SPY` -> BRK.B appears in results
+8. `scan_sector_for_strat <a sector>` -> 30+ symbols, no 429s
+
+### Step 8 wrap-up still to do (after Step 7 passes)
+
+- Recreate local `.env.test` with Tradier creds (safety_guard hook
+  blocks Claude from writing `.env*` files; user must do this manually
+  if needed; gitignored now so no commit risk).
+- Update `docs/SCANNER_STATUS_BRIEF.md` "Last Known Healthy Date" to
+  2026-05-23 and the deployment URL to the atlas-monitoring URL.
+- Update `.session_startup_prompt.md` for the next session.
+- Optional cleanup: add `strat-stock-scanner-production.up.railway.app`
+  as an alias domain on Railway so old bookmarks redirect to the live
+  service.
+
+### Background agent
+
+A `codex:codex-rescue` agent was launched at 2026-05-23T05:13Z (UTC)
+for an adversarial post-merge bug hunt. If its findings landed before
+the user opens this file, they will be summarized in a follow-up block
+below this section. If still running, check the agent task list.
+
+---
+
 ## Session 2026-05-21: Workflow Scaffolding Bootstrap (COMPLETE)
 
 **Date:** 2026-05-21
