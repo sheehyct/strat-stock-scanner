@@ -3,23 +3,104 @@ OAuth 2.1 Authorization Server with PKCE
 Implements MCP spec-compliant authentication
 """
 
-from fastapi import APIRouter, HTTPException, Form, Query
-from fastapi.responses import RedirectResponse, JSONResponse
-from typing import Optional
-from datetime import datetime, timedelta
-from jose import jwt
-import secrets
-import hashlib
 import base64
+import hashlib
+import logging
+import secrets
+from datetime import datetime, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, Form, HTTPException, Query
+from fastapi.responses import JSONResponse, RedirectResponse
+from jose import jwt
+
 from config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # In-memory storage for authorization codes and refresh tokens
 # In production, use Redis or database
 authorization_codes = {}
 refresh_tokens = {}
 ALGORITHM = "HS256"
+
+
+def _oauth_error(error: str, description: str, status_code: int = 400) -> JSONResponse:
+    """RFC 6749 §5.2 error response shape."""
+    headers = {"WWW-Authenticate": "Bearer"} if error == "invalid_client" else None
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "error_description": description},
+        headers=headers,
+    )
+
+
+def _redact(value: Optional[str], keep: int = 6) -> str:
+    """Truncate a sensitive value for log lines."""
+    if value is None:
+        return "<none>"
+    if len(value) <= keep:
+        return f"<{len(value)} chars>"
+    return f"{value[:keep]}...<{len(value) - keep} more chars>"
+
+
+def _check_client_id(client_id: str) -> Optional[JSONResponse]:
+    if client_id == settings.OAUTH_CLIENT_ID:
+        return None
+    logger.warning(
+        "oauth_client_id_mismatch received=%s expected=%s strict=%s",
+        _redact(client_id),
+        _redact(settings.OAUTH_CLIENT_ID),
+        settings.STRICT_OAUTH_VALIDATION,
+    )
+    if settings.STRICT_OAUTH_VALIDATION:
+        return _oauth_error("invalid_client", "Unknown client_id", status_code=401)
+    return None
+
+
+def _check_redirect_uri(redirect_uri: str) -> Optional[JSONResponse]:
+    raw = settings.OAUTH_REDIRECT_URI_ALLOWLIST
+    if not raw:
+        return None
+    allowlist = [u.strip() for u in raw.split(",") if u.strip()]
+    if redirect_uri in allowlist:
+        return None
+    logger.warning(
+        "oauth_redirect_uri_not_in_allowlist received=%s strict=%s",
+        redirect_uri,
+        settings.STRICT_OAUTH_VALIDATION,
+    )
+    if settings.STRICT_OAUTH_VALIDATION:
+        return _oauth_error(
+            "invalid_request",
+            "redirect_uri is not in the allow-list",
+            status_code=400,
+        )
+    return None
+
+
+def _check_client_secret(provided: Optional[str]) -> Optional[JSONResponse]:
+    """Confidential-client check. No-op when OAUTH_CLIENT_SECRET is unset
+    (public client + PKCE). If the secret is configured but the request
+    omits it, treat as a public-client flow (PKCE covers proof of
+    possession). Only mismatched values are flagged."""
+    expected = settings.OAUTH_CLIENT_SECRET
+    if not expected or provided is None:
+        return None
+    if secrets.compare_digest(provided, expected):
+        return None
+    logger.warning(
+        "oauth_client_secret_mismatch strict=%s",
+        settings.STRICT_OAUTH_VALIDATION,
+    )
+    if settings.STRICT_OAUTH_VALIDATION:
+        return _oauth_error(
+            "invalid_client",
+            "Client secret does not match",
+            status_code=401,
+        )
+    return None
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -141,6 +222,15 @@ async def authorize(
     if code_challenge_method != "S256":
         raise HTTPException(status_code=400, detail="Only S256 PKCE method supported")
 
+    # Client validation. In log-only mode these return None and the request
+    # proceeds; in strict mode they short-circuit with an RFC 6749 error.
+    err = _check_client_id(client_id)
+    if err is not None:
+        return err
+    err = _check_redirect_uri(redirect_uri)
+    if err is not None:
+        return err
+
     # Generate authorization code
     auth_code = secrets.token_urlsafe(32)
 
@@ -197,6 +287,17 @@ async def token(
                 status_code=400,
                 detail="Missing required parameters: code, redirect_uri, code_verifier"
             )
+
+        # Client validation. Only enforced when the client supplied a
+        # value; the stored auth_data.client_id is the source of truth
+        # for what was bound at /authorize time.
+        if client_id is not None:
+            err = _check_client_id(client_id)
+            if err is not None:
+                return err
+        err = _check_client_secret(client_secret)
+        if err is not None:
+            return err
 
         # Validate authorization code
         if code not in authorization_codes:
