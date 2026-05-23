@@ -61,8 +61,52 @@ class STRATPattern:
         self.direction = direction  # "bullish" or "bearish"
         self.confidence = confidence  # "high", "medium", "low"
         self.description = description
-        self.entry_level = bars[-1].high if direction == "bullish" else bars[-1].low
         self.timestamp = bars[-1].timestamp
+        self.entry_level = self._compute_entry_level()
+
+    def _compute_entry_level(self) -> float:
+        """Compute the methodology-correct entry trigger price.
+
+        Per strat-methodology references/ENTRY_MECHANICS.md, the trigger price
+        depends on the pattern shape, not just on whether the signal is
+        bullish or bearish:
+
+        - X-1-2 confirmed patterns (2-1-2 Reversal, 3-1-2 Continuation):
+          trigger lives on the inside bar (bars[1]). Bullish: inside high
+          + 0.01. Bearish: inside low - 0.01.
+        - X-1 setups (2-1 Setup, 3-1 Setup, Inside Bar Setup): trigger
+          lives on the inside bar (bars[-1], which equals bars[1] for the
+          2-bar setup shape). Same +/- 0.01 offset.
+        - 2-2 patterns (Reversal, Continuation): trigger lives on the
+          reference bar (bars[0]). Bullish: reference high + 0.01.
+          Bearish: reference low - 0.01.
+
+        The +/- 0.01 cent offset matches the methodology's "enter on the
+        break" rule (price must STRICTLY cross the bar level to fire).
+        """
+        bullish = self.direction == "bullish"
+        offset = 0.01 if bullish else -0.01
+
+        x_1_2_patterns = ("2-1-2 Reversal", "3-1-2 Continuation")
+        x_1_setups = ("2-1 Setup", "3-1 Setup", "Inside Bar Setup")
+        two_two_patterns = ("2-2 Reversal", "2-2 Continuation")
+
+        if self.pattern_type in x_1_2_patterns:
+            inside = self.bars[1]
+            level = inside.high if bullish else inside.low
+        elif self.pattern_type in x_1_setups:
+            inside = self.bars[-1]
+            level = inside.high if bullish else inside.low
+        elif self.pattern_type in two_two_patterns:
+            ref = self.bars[0]
+            level = ref.high if bullish else ref.low
+        else:
+            # Unrecognized pattern type - fall back to last bar high/low
+            # with offset. Surfaces a usable number even for future pattern
+            # types that haven't been mapped yet.
+            level = self.bars[-1].high if bullish else self.bars[-1].low
+
+        return level + offset
 
     def __repr__(self):
         return f"{self.pattern_type} ({self.direction}) - {self.confidence} confidence"
@@ -570,7 +614,7 @@ class STRATDetector:
                 bars=[bar1, bar2, bar3],
                 direction="bullish",
                 confidence="high",
-                description=f"Bullish 2-1-2: Reversal from low ${bar1.low:.2f} through inside bar, breaking to ${bar3.high:.2f}"
+                description=f"Bullish 2-1-2: Reversal from 2D low ${bar1.low:.2f}; trigger at inside bar high ${bar2.high:.2f} + 0.01"
             )
 
         # Bearish 2-1-2: 2U -> 1 -> 2D
@@ -580,7 +624,7 @@ class STRATDetector:
                 bars=[bar1, bar2, bar3],
                 direction="bearish",
                 confidence="high",
-                description=f"Bearish 2-1-2: Reversal from high ${bar1.high:.2f} through inside bar, breaking to ${bar3.low:.2f}"
+                description=f"Bearish 2-1-2: Reversal from 2U high ${bar1.high:.2f}; trigger at inside bar low ${bar2.low:.2f} - 0.01"
             )
 
         return None
@@ -650,7 +694,7 @@ class STRATDetector:
                 bars=[bar1, bar2, bar3],
                 direction="bullish",
                 confidence="high",
-                description=f"Bullish 3-1-2: Trend continuation breaking to new high ${bar3.high:.2f}"
+                description=f"Bullish 3-1-2: Trend continuation; trigger at inside bar high ${bar2.high:.2f} + 0.01"
             )
 
         # Bearish continuation: 3 down -> 1 -> 2D
@@ -660,7 +704,7 @@ class STRATDetector:
                 bars=[bar1, bar2, bar3],
                 direction="bearish",
                 confidence="high",
-                description=f"Bearish 3-1-2: Trend continuation breaking to new low ${bar3.low:.2f}"
+                description=f"Bearish 3-1-2: Trend continuation; trigger at inside bar low ${bar2.low:.2f} - 0.01"
             )
 
         return None
@@ -727,7 +771,7 @@ class STRATDetector:
                 bars=[bar1, bar2],
                 direction="bullish",
                 confidence="medium",
-                description=f"Bullish 2-2 Reversal: Direction change from 2D to 2U, breaking to ${bar2.high:.2f}"
+                description=f"Bullish 2-2 Reversal: 2D to 2U flip; trigger at reference bar (2D) high ${bar1.high:.2f} + 0.01"
             )
 
         # Bearish 2-2 Reversal: 2U -> 2D
@@ -737,7 +781,7 @@ class STRATDetector:
                 bars=[bar1, bar2],
                 direction="bearish",
                 confidence="medium",
-                description=f"Bearish 2-2 Reversal: Direction change from 2U to 2D, breaking to ${bar2.low:.2f}"
+                description=f"Bearish 2-2 Reversal: 2U to 2D flip; trigger at reference bar (2U) low ${bar1.low:.2f} - 0.01"
             )
 
         return None
