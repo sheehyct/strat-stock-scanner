@@ -485,9 +485,9 @@ curl "https://data.alpaca.markets/v2/stocks/AAPL/bars?start=2025-11-01&end=2025-
 **Verify these are set in Railway dashboard:**
 
 ```bash
-# Alpaca Credentials
-ALPACA_API_KEY=PKOQWHH32GDJ44CDUMPYEHGVEW
-ALPACA_API_SECRET=FMJuXfFaaPeuZzy6tTMoFoHieW5fBYWzyAKQHUJw2DDN
+# Alpaca Credentials (DEPRECATED — replaced by Tradier on 2026-05-23)
+ALPACA_API_KEY=<redacted_rotated_2026-05-22>
+ALPACA_API_SECRET=<redacted_rotated_2026-05-22>
 ALPACA_BASE_URL=https://data.alpaca.markets/v2
 
 # OAuth Secrets

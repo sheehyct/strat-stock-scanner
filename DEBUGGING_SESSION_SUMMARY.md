@@ -126,8 +126,8 @@ git push origin main
 **IMPORTANT: Verify Railway Environment Variables**
 In Railway dashboard, ensure these are set:
 ```
-ALPACA_API_KEY=PKOQWHH32GDJ44CDUMPYEHGVEW
-ALPACA_API_SECRET=FMJuXfFaaPeuZzy6tTMoFoHieW5fBYWzyAKQHUJw2DDN
+ALPACA_API_KEY=<redacted_rotated_2026-05-22>
+ALPACA_API_SECRET=<redacted_rotated_2026-05-22>
 ALPACA_BASE_URL=https://data.alpaca.markets/v2  ← CRITICAL!
 JWT_SECRET_KEY=<your-production-secret>
 OAUTH_CLIENT_ID=claude-mcp-client
