@@ -88,7 +88,7 @@ in the parent ATLAS project.
 - If the user asks "did the 3-1-2 just complete?" the answer is yes the
   moment price prints through the trigger, not at the next bar close.
 
-See `strat-methodology` skill `EXECUTION.md` "CRITICAL: Entry Timing" section.
+See `strat-methodology` skill Section 1 (critical invariants) and Section 3.1 (detection rules): entry fires the instant price breaks the trigger, intrabar.
 
 ## Data Sources
 
